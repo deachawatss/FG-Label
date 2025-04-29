@@ -1,0 +1,118 @@
+name: FG Label CI
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+env:
+  # Define environment variables if needed for build steps
+  # DOTNET_VERSION: '8.0.x'
+  # NODE_VERSION: '18.x'
+  pass:
+
+jobs:
+  lint-build-test:
+    runs-on: ubuntu-latest # Use Linux runner for general tasks; Windows runner might be needed for specific tests/builds
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # --- Frontend (Next.js) Steps ---
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18.x'
+        cache: 'npm' # or 'yarn', 'pnpm'
+        cache-dependency-path: apps/web-ui/package-lock.json # or yarn.lock, pnpm-lock.yaml
+
+    - name: Install Frontend Dependencies
+      run: npm ci # or yarn install --frozen-lockfile, pnpm i --frozen-lockfile
+      working-directory: ./apps/web-ui
+
+    - name: Lint Frontend
+      run: npm run lint
+      working-directory: ./apps/web-ui
+
+    - name: Build Frontend
+      run: npm run build
+      working-directory: ./apps/web-ui
+      # Add environment variables needed for build if any
+      # env:
+      #   NEXT_PUBLIC_API_URL: ${{ secrets.CI_API_URL }}
+
+    # - name: Run Frontend Unit Tests (Vitest - if configured)
+    #   run: npm run test:unit
+    #   working-directory: ./apps/web-ui
+
+
+    # --- Backend (.NET) Steps ---
+    - name: Set up .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore .NET Dependencies (API)
+      run: dotnet restore ./apps/api-gateway/FgLabel.Api.csproj
+
+    - name: Build API Gateway
+      run: dotnet build ./apps/api-gateway/FgLabel.Api.csproj --configuration Release --no-restore
+
+    # - name: Run API Unit Tests (xUnit - if configured)
+    #   run: dotnet test ./path/to/api/tests/project.csproj --no-build --verbosity normal
+
+    - name: Restore .NET Dependencies (Worker)
+      run: dotnet restore ./apps/worker-service/FgLabel.Worker.csproj
+
+    - name: Build Worker Service
+      run: dotnet build ./apps/worker-service/FgLabel.Worker.csproj --configuration Release --no-restore
+
+    # - name: Run Worker Unit Tests (xUnit - if configured)
+    #   run: dotnet test ./path/to/worker/tests/project.csproj --no-build --verbosity normal
+
+
+  # --- Optional: Build Docker Images ---
+  # build-docker:
+  #   needs: lint-build-test # Run after tests pass
+  #   runs-on: ubuntu-latest # Or windows-latest if building windows containers directly
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
+      
+  #   - name: Set up Docker Buildx
+  #     uses: docker/setup-buildx-action@v3
+
+  #   - name: Log in to Docker Hub (or other registry)
+  #     uses: docker/login-action@v3
+  #     with:
+  #       username: ${{ secrets.DOCKER_USERNAME }}
+  #       password: ${{ secrets.DOCKER_PASSWORD }}
+
+  #   - name: Build and push API Gateway Image
+  #     uses: docker/build-push-action@v5
+  #     with:
+  #       context: .
+  #       file: ./apps/api-gateway/Dockerfile-Windows # Specify Windows Dockerfile
+  #       push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }} # Push only on main branch merge
+  #       tags: yourdockerhub/fglabel-api-gateway:latest, yourdockerhub/fglabel-api-gateway:${{ github.sha }}
+  #       # platform: windows/amd64 # Specify platform if building on Linux for Windows
+
+  #   - name: Build and push Worker Service Image
+  #     uses: docker/build-push-action@v5
+  #     with:
+  #       context: .
+  #       file: ./apps/worker-service/Dockerfile-Windows
+  #       push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  #       tags: yourdockerhub/fglabel-worker-service:latest, yourdockerhub/fglabel-worker-service:${{ github.sha }}
+  #       # platform: windows/amd64
+
+  #   - name: Build and push Web UI Image
+  #     uses: docker/build-push-action@v5
+  #     with:
+  #       context: .
+  #       file: ./apps/web-ui/Dockerfile # Assuming Linux container for Node
+  #       push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  #       tags: yourdockerhub/fglabel-web-ui:latest, yourdockerhub/fglabel-web-ui:${{ github.sha }}
+  #       # platform: linux/amd64 

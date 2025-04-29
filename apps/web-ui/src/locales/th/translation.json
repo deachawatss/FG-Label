@@ -1,0 +1,38 @@
+{
+  "common": {
+    "error": "เกิดข้อผิดพลาด",
+    "confirm": "ยืนยัน",
+    "cancel": "ยกเลิก"
+  },
+  "login": {
+    "title": "เข้าสู่ระบบ",
+    "username": "ชื่อผู้ใช้",
+    "password": "รหัสผ่าน",
+    "usernamePlaceholder": "กรุณากรอกชื่อผู้ใช้",
+    "passwordPlaceholder": "กรุณากรอกรหัสผ่าน",
+    "submit": "เข้าสู่ระบบ",
+    "loading": "กำลังเข้าสู่ระบบ...",
+    "error": "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
+  },
+  "batchSearch": {
+    "title": "ค้นหา Batch",
+    "search": "ค้นหา batch...",
+    "refresh": "รีเฟรช",
+    "columns": {
+      "batchNo": "Batch No",
+      "product": "สินค้า",
+      "customer": "ลูกค้า",
+      "createdAt": "วันที่สร้าง",
+      "action": "ดำเนินการ"
+    },
+    "pagination": {
+      "total": "ทั้งหมด {{total}} รายการ"
+    },
+    "print": {
+      "title": "ยืนยันการพิมพ์",
+      "message": "คุณต้องการพิมพ์ Batch No: {{batchNo}} ใช่หรือไม่?",
+      "success": "สร้างงานพิมพ์สำเร็จ",
+      "error": "ไม่สามารถสร้างงานพิมพ์ได้"
+    }
+  }
+} 

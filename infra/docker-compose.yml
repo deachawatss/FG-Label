@@ -1,0 +1,72 @@
+# removed version for newer Compose
+
+services:
+  redis:
+    image: redis:latest
+    container_name: fglabel_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    # Add persistence if needed:
+    # volumes:
+    #   - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: fglabel_rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    restart: unless-stopped
+    # Add persistence if needed:
+    # volumes:
+    #  - rabbitmq_data:/var/lib/rabbitmq
+
+  api-gateway:
+    env_file:
+      - ../.env
+    build:
+      context: ../apps/api-gateway
+      dockerfile: Dockerfile
+    container_name: fglabel_api_gateway
+    ports:
+      - "7070:80"    # Map host port 7070 to container port 80
+    depends_on:
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+    # Add volumes if needed for logs or config
+
+  worker-service:
+    env_file:
+      - ../.env
+    build:
+      context: ../apps/worker-service
+      dockerfile: Dockerfile
+    container_name: fglabel_worker_service
+    depends_on:
+      - rabbitmq
+    restart: unless-stopped
+    # Add volumes if needed
+
+  web-ui:
+    env_file:
+      - ../.env
+    build:
+      context: ../apps/web-ui
+      dockerfile: Dockerfile
+    container_name: fglabel_web_ui
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+    # Add volumes if needed (e.g., for .next build cache)
+
+# Optional: Define volumes for persistence
+# volumes:
+#   redis_data:
+#   rabbitmq_data:
+
+# Note: MS SQL Server is assumed to be running externally and its connection string
+# is provided via the MSSQL_CONNECTION_STRING environment variable. 
