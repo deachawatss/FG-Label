@@ -7,6 +7,9 @@ using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Retry;
 using Microsoft.Extensions.Configuration;
+using FgLabel.Shared.Models;
+using FgLabel.Shared.Services;
+using FgLabel.Shared.Utilities;
 
 namespace FgLabel.Worker.Services;
 
@@ -28,9 +31,15 @@ public class PrintJobHandler : BackgroundService
         
         try
         {
-            var host = _configuration["RabbitMQ__HostName"] ?? "localhost";
-            var user = _configuration["RabbitMQ__UserName"] ?? "guest";
-            var pass = _configuration["RabbitMQ__Password"] ?? "guest";
+            var host = Environment.GetEnvironmentVariable("RABBITMQ__HostName") 
+                ?? _configuration["RabbitMQ__HostName"] 
+                ?? "localhost";
+            var user = Environment.GetEnvironmentVariable("RABBITMQ__UserName") 
+                ?? _configuration["RabbitMQ__UserName"] 
+                ?? "guest";
+            var pass = Environment.GetEnvironmentVariable("RABBITMQ__Password") 
+                ?? _configuration["RabbitMQ__Password"] 
+                ?? "guest";
 
             _logger.LogInformation("RabbitMQ__HostName: {Host}", host);
             _logger.LogInformation("RabbitMQ__UserName: {User}", user);
@@ -171,7 +180,7 @@ public class PrintJobHandler : BackgroundService
     {
         try
         {
-            var job = JsonSerializer.Deserialize<PrintJob>(message);
+            var job = JsonSerializer.Deserialize<LabelPrintJob>(message);
             if (job == null)
             {
                 throw new InvalidOperationException("Invalid print job format");
@@ -180,7 +189,7 @@ public class PrintJobHandler : BackgroundService
             _logger.LogInformation(
                 "Processing print job: BatchNo={BatchNo}, TemplateId={TemplateId}, Copies={Copies}",
                 job.BatchNo,
-                job.TemplateId,
+                job.TemplateID,
                 job.Copies
             );
 
@@ -190,7 +199,7 @@ public class PrintJobHandler : BackgroundService
             _logger.LogInformation(
                 "Print job completed: BatchNo={BatchNo}, TemplateId={TemplateId}",
                 job.BatchNo,
-                job.TemplateId
+                job.TemplateID
             );
         }
         catch (JsonException ex)
@@ -212,11 +221,4 @@ public class PrintJobHandler : BackgroundService
         _connection?.Close();
         await base.StopAsync(cancellationToken);
     }
-}
-
-public class PrintJob
-{
-    public string BatchNo { get; set; } = string.Empty;
-    public string TemplateId { get; set; } = string.Empty;
-    public int Copies { get; set; }
 } 

@@ -2,7 +2,7 @@ import axios from "axios";
 import type { AxiosRequestHeaders } from "axios";
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5051/api',
   headers: {
     "Content-Type": "application/json",
   },
@@ -10,12 +10,14 @@ const api = axios.create({
 
 // Interceptor แนบ token ทุก request
 api.interceptors.request.use((config) => {
-  const t = localStorage.getItem("jwt");
-  if (t) {
-    config.headers = {
-      ...config.headers,
-      Authorization: `Bearer ${t}`,
-    } as AxiosRequestHeaders;
+  // ตรวจสอบว่าเรากำลังใช้งานใน browser หรือไม่ก่อนเรียก localStorage
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    if (token) {
+      // ใช้วิธีการกำหนด header แบบปลอดภัยกับ TypeScript
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
   }
   return config;
 }, (error) => Promise.reject(error));
@@ -23,9 +25,12 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('jwt');
-      window.location.href = "/login";
+    // ตรวจสอบว่าเรากำลังใช้งานใน browser หรือไม่ก่อนเรียก localStorage
+    if (typeof window !== 'undefined') {
+      if (error.response?.status === 401) {
+        localStorage.removeItem('token');
+        window.location.href = "/login";
+      }
     }
     return Promise.reject(error);
   }

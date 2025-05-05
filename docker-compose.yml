@@ -1,34 +1,18 @@
-# ⬇︎ แนะนำให้ลบบรรทัด version: ออก (Compose V2 ไม่ใช้แล้ว)
-
 services:
-  mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: fglabel_sql
-    env_file: .env            # ✅ ชี้ไปที่ .env เดิม
-    environment:
-      - ACCEPT_EULA=Y
-      - MSSQL_PID=Developer
-      - SA_PASSWORD=${MSSQL_SA_PASSWORD}
-    healthcheck:
-      test: ["CMD-SHELL", "sqlcmd -S localhost -U sa -P $$MSSQL_SA_PASSWORD -Q 'SELECT 1'"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - mssql_data:/var/opt/mssql
-    ports:
-      - "${MSSQL_HOST_PORT}:1433"
-
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: fglabel_rabbit
-    env_file: .env
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
     ports:
       - "${RABBITMQ_HOST_PORT}:5672"
       - "${RABBITMQ_MAN_PORT}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
 
   redis:
     image: redis:7.2
@@ -38,51 +22,90 @@ services:
       - "${REDIS_HOST_PORT}:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   api-gateway:
     build:
-      context: ./apps/api-gateway
+      context: .
+      dockerfile: ./apps/api-gateway/Dockerfile
     container_name: fglabel_api_gateway
-    env_file: .env
     depends_on:
-      mssql:
-        condition: service_healthy
       rabbitmq:
         condition: service_started
       redis:
-        condition: service_started
+        condition: service_healthy
     environment:
-      - ConnectionStrings__DefaultConnection=Server=192.168.0.86,49381;Database=TFCPILOT;User ID=dvl;Password=Pr0gr@mm1ng;TrustServerCertificate=Yes;
-      - Rabbit__Host=rabbitmq
-      - Redis__Configuration=redis:6379,defaultDatabase=0
-      - ASPNETCORE_URLS=http://+:${API_PORT}         # ✅ ใช้ค่าจาก .env
+      - JWT__Key=${JWT__Key}
+      - JWT__Issuer=${JWT__Issuer}
+      - JWT__Audience=${JWT__Audience}
+      - ConnectionStrings__DefaultConnection=${MSSQL_CONN}
+      - RABBITMQ__HostName=${RabbitMQ__HostName}
+      - RABBITMQ__UserName=${RabbitMQ__UserName}
+      - RABBITMQ__Password=${RabbitMQ__Password}
+      - Redis__ConnectionString=${Redis__ConnectionString}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - AD__Url=${AD__Url}
+      - AD__BaseDn=${AD__BaseDn}
+      - AD__Username=${AD__Username}
+      - AD__Password=${AD__Password}
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT}
+      - DOTNET_ENVIRONMENT=${DOTNET_ENVIRONMENT}
+      - ASPNETCORE_URLS=http://+:${API_PORT}
+      - BYPASS_LDAP=${BYPASS_LDAP}
     ports:
       - "${API_PORT}:${API_PORT}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${API_PORT}/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   worker:
     build:
-      context: ./apps/worker-service
+      context: .
+      dockerfile: ./apps/worker-service/Dockerfile
     container_name: fglabel_worker
-    env_file: .env
     depends_on:
       rabbitmq:
         condition: service_started
-      mssql:
+      redis:
         condition: service_healthy
+    environment:
+      - JWT__Key=${JWT__Key}
+      - JWT__Issuer=${JWT__Issuer}
+      - JWT__Audience=${JWT__Audience}
+      - ConnectionStrings__DefaultConnection=${MSSQL_CONN}
+      - RABBITMQ__HostName=${RabbitMQ__HostName}
+      - RABBITMQ__UserName=${RabbitMQ__UserName}
+      - RABBITMQ__Password=${RabbitMQ__Password}
+      - Redis__ConnectionString=${Redis__ConnectionString}
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT}
+      - DOTNET_ENVIRONMENT=${DOTNET_ENVIRONMENT}
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
 
   web-ui:
     build:
-      context: ./apps/web-ui
+      context: .
+      dockerfile: ./apps/web-ui/Dockerfile
     container_name: fglabel_web
-    env_file: .env
     depends_on:
       api-gateway:
-        condition: service_started
+        condition: service_healthy
     environment:
-      - VITE_API_BASE=http://localhost:${API_PORT}
+      - NODE_ENV=${NODE_ENV}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_SIGNALR_URL=${NEXT_PUBLIC_SIGNALR_URL}
     ports:
-      - "${WEB_PORT}:80"
+      - "${WEB_PORT}:3500"
 
 volumes:
-  mssql_data:
   redis_data:

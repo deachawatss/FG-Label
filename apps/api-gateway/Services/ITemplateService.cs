@@ -1,5 +1,5 @@
 using System.Threading.Tasks;
-using FgLabel.Api.Models;
+using FgLabel.Shared.Models;
 
 namespace FgLabel.Api.Services
 {
@@ -7,5 +7,6 @@ namespace FgLabel.Api.Services
     {
         Task<int> CreateOrGetTemplateAsync(string batchNo);
         Task<int> AutoCreateTemplateAsync(AutoCreateRequest request);
+        Task<int> SaveTemplateAsync(CreateTemplateRequest request);
     }
 }

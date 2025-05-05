@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using FgLabel.Api.Models;
+using FgLabel.Shared.Models;
 
 namespace FgLabel.Api.Services
 {

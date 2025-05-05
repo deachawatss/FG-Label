@@ -1,53 +1,66 @@
 # ---------- deps stage ----------
-FROM node:18-alpine AS base
-WORKDIR /app
+FROM registry.access.redhat.com/ubi8/nodejs-20:latest AS deps
+WORKDIR /opt/app-root/src
 
-FROM base AS deps
-COPY ["apps/web-ui/package.json", "apps/web-ui/package-lock.json", "./"]
-COPY [".env", "/app/.env"]
-RUN npm ci
-
-# ---------- build stage ----------
-FROM node:18-alpine AS builder
-
-WORKDIR /app
+# อัปเดตแพ็คเกจระบบและติดตั้งแพ็คเกจที่จำเป็นเพื่อป้องกันช่องโหว่
+USER 0
+RUN dnf update -y && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+USER 1001
 
 # Copy package files
-COPY package*.json ./
-COPY apps/web-ui/package*.json ./apps/web-ui/
+COPY --chown=1001:0 ["apps/web-ui/package.json", "apps/web-ui/package-lock.json", "./"]
+COPY --chown=1001:0 [".env", "/opt/app-root/src/.env"]
+RUN npm ci --legacy-peer-deps
+
+# ---------- build stage ----------
+FROM registry.access.redhat.com/ubi8/nodejs-20:latest AS builder
+WORKDIR /opt/app-root/src
+
+# อัปเดตแพ็คเกจระบบและติดตั้งแพ็คเกจที่จำเป็นเพื่อป้องกันช่องโหว่
+USER 0
+RUN dnf update -y && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+USER 1001
+
+# Copy package files
+COPY --chown=1001:0 package*.json ./
+COPY --chown=1001:0 apps/web-ui/package*.json ./apps/web-ui/
 
 # Install dependencies
-RUN npm install
-RUN cd apps/web-ui && npm install
+RUN npm install --legacy-peer-deps && \
+    cd apps/web-ui && npm install --legacy-peer-deps
 
 # Copy source code
-COPY . .
+COPY --chown=1001:0 . .
 
 # Build the application
-WORKDIR /app/apps/web-ui
-RUN npm run build
+WORKDIR /opt/app-root/src/apps/web-ui
+RUN npm run build && \
+    npm prune --production --legacy-peer-deps
 
 # ---------- runtime stage ----------
-FROM node:18-alpine AS runner
-
-WORKDIR /app
-
-# Copy necessary files from builder
-COPY --from=builder /app/apps/web-ui/.next ./.next
-COPY --from=builder /app/apps/web-ui/package*.json ./
-COPY --from=builder /app/apps/web-ui/public ./public
-COPY --from=builder /app/apps/web-ui/next.config.js ./
-COPY --from=builder /app/.env ./.env
-
-# Install production dependencies
-RUN npm install --production
+FROM registry.access.redhat.com/ubi8/nodejs-20-minimal:latest AS runner
+WORKDIR /opt/app-root/src
 
 # Set environment variables
 ENV PORT=3500
 ENV NODE_ENV=production
 
+# Copy necessary files from builder
+COPY --from=builder --chown=1001:0 /opt/app-root/src/apps/web-ui/.next ./.next
+COPY --from=builder --chown=1001:0 /opt/app-root/src/apps/web-ui/node_modules ./node_modules
+COPY --from=builder --chown=1001:0 /opt/app-root/src/apps/web-ui/package.json ./package.json
+COPY --from=builder --chown=1001:0 /opt/app-root/src/apps/web-ui/public ./public
+COPY --from=builder --chown=1001:0 /opt/app-root/src/apps/web-ui/next.config.js ./next.config.js
+COPY --from=builder --chown=1001:0 /opt/app-root/src/.env ./.env
+
+# หมายเหตุ: ubi-minimal มี non-root user มาให้แล้ว (uid 1001)
+
 # Expose port
 EXPOSE 3500
 
 # Start the application
-CMD ["npm", "start"]
+CMD ["node_modules/.bin/next", "start"]

@@ -5,7 +5,7 @@ using Dapper;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using FgLabel.Api.Models;
+using FgLabel.Shared.Models;
 
 namespace FgLabel.Api.Services;
 
