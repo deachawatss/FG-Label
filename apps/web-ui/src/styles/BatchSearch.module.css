@@ -1,0 +1,93 @@
+/* BatchSearch.module.css */
+/* สไตล์สำหรับหน้าค้นหาแบตช์ */
+
+.searchContainer {
+  margin-bottom: 24px;
+  padding: 16px;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.tableContainer {
+  background-color: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.headerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f1f1f;
+  margin-bottom: 16px;
+}
+
+.previewContainer {
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  background-color: #fafafa;
+}
+
+.previewCanvas {
+  width: 100%;
+  min-height: 400px;
+  border: 1px dashed #d9d9d9;
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: white;
+}
+
+.buttonsContainer {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.batchInfoItem {
+  margin-bottom: 8px;
+}
+
+.batchInfoLabel {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.printOptions {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+
+/* สไตล์สำหรับการแสดงผลบนมือถือ */
+@media (max-width: 768px) {
+  .headerRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .buttonsContainer {
+    margin-top: 12px;
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+} 

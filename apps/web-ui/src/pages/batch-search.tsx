@@ -1,13 +1,72 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/router';
-import { Button, Table, Input, Space, DatePicker, message, Modal, Select, Spin, InputNumber, Tooltip } from 'antd';
-import { PrinterOutlined, SearchOutlined, ReloadOutlined, LogoutOutlined, PlusOutlined, SettingOutlined, EditOutlined, DownloadOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Button, Table, Input, Space, DatePicker, message, Modal, Select, Spin, InputNumber, Tooltip, Tag, AutoComplete, Checkbox, Tabs } from 'antd';
+import { PrinterOutlined, SearchOutlined, ReloadOutlined, LogoutOutlined, PlusOutlined, SettingOutlined, EditOutlined, DownloadOutlined, FileTextOutlined, FileSearchOutlined, EyeOutlined } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
 import { useTranslation } from 'react-i18next';
 import Image from "next/image";
 import RequireAuth from '../components/RequireAuth';
 import jsPDF from 'jspdf';
+import Head from 'next/head';
+import styles from '../styles/BatchSearch.module.css';
+import { debounce } from 'lodash';
+
+// สร้างฟังก์ชัน helper เพื่อรองรับทั้งชื่อฟิลด์แบบตัวใหญ่และตัวเล็ก
+const extractBatchData = (data: any) => {
+  const batchNo = data.batchNo || data.BatchNo || '';
+  const bagNo = data.bagNo || data.BagNo || '';
+  
+  return {
+    id: data.id || `${batchNo}-${bagNo}`,
+    batchNo,
+    bagNo,
+    productKey: data.ItemKey || data.productKey || data.ProductKey || data.Itemkey || '',
+    productName: data.productName || data.ProductName || data.PRODUCT || data.Product || '',
+    customerKey: data.CustKey || data.customerKey || data.CustomerKey || data.Custkey || '',
+    customerName: data.Customer_Name || data.customerName || data.CustomerName || '',
+    lotCode: data.lotCode || data.LotCode || data['LOT CODE'] || '',
+    bestBefore: data.bestBefore || data.BestBefore || data['BEST BEFORE'] || '',
+    productionDate: data.productionDate || data.ProductionDate || data.ActStartDate || '',
+    expiryDate: data.expiryDate || data.ExpiryDate || data.CalculatedExpiryDate || '',
+    netWeight: data.netWeight || data.NetWeight || data.NET_WEIGHT1 || '',
+    templateId: data.templateId || data.TemplateID || null,
+    templateName: data.templateName || data.TemplateName || '',
+    templateUpdatedAt: data.templateUpdatedAt || data.TemplateUpdatedAt || null,
+    updatedAt: data.updatedAt || data.UpdatedAt || data.CREATED_DATE || data.CreatedDate || '',
+    batchTicketDate: data.batchTicketDate || data.BatchTicketDate || data.CREATED_DATE || '',
+    packSize1: data.packSize1 || data.PackSize1 || data.PACKSIZE1 || '',
+    packUnit1: data.packUnit1 || data.PackUnit1 || data.PACKUNIT1 || '',
+    packSize2: data.packSize2 || data.PackSize2 || data.PACKSIZE2 || '',
+    packUnit2: data.packUnit2 || data.PackUnit2 || data.PACKUNIT2 || '',
+    totalUnit2InUnit1: data.totalUnit2InUnit1 || data.TotalUnit2InUnit1 || data.TOTAL_UNIT2_IN_UNIT1 || data.UNIT2INUNIT1 || 0,
+    netWeight1: data.netWeight1 || data.NetWeight1 || data.NET_WEIGHT1 || 0,
+    shelfLifeMonth: data.shelfLifeMonth || data.ShelfLifeMonth || data.SHELFLIFE_MONTH || data.SHELF_LIFE_M || 0,
+    shelfLifeDay: data.shelfLifeDay || data.ShelfLifeDay || data.SHELFLIFE_DAY || data.SHELF_LIFE_D || 0,
+    allergen1: data.allergen1 || data.Allergen1 || data.ALLERGEN1 || data.ALLERGENS || '',
+    allergen2: data.allergen2 || data.Allergen2 || data.ALLERGEN2 || '',
+    allergen3: data.allergen3 || data.Allergen3 || data.ALLERGEN3 || '',
+    storageCondition: data.storageCondition || data.StorageCondition || data.STORECAP1 || data['STORAGE INSTRUCTION'] || '',
+    totalBags: data.totalBags || data.TotalBags || data.TOTAL_BAGS || 0
+  };
+};
+
+// คำนวณ QR code data
+const generateQRCode = (data: any) => {
+  const extractedData = extractBatchData(data);
+  
+  // แปลงเป็น JSON string
+  return JSON.stringify({
+    batchNo: extractedData.batchNo,
+    bagNo: extractedData.bagNo,
+    product: extractedData.productName,
+    productKey: extractedData.productKey,
+    customer: extractedData.customerName,
+    customerKey: extractedData.customerKey,
+    date: extractedData.productionDate || new Date().toISOString(),
+    expiryDate: extractedData.expiryDate
+  });
+};
 
 // ตรวจสอบว่าอยู่ในฝั่ง client
 const isClient = typeof window !== 'undefined';
@@ -21,13 +80,36 @@ if (isClient) {
 }
 
 interface Batch {
+  id: string;
   batchNo: string;
-  productKey: string | null;
-  customerKey: string | null;
-  updatedAt: string;          // ← always *UTC* from API
-  templateId?: number | null;
+  bagNo: string;
+  productKey: string;
+  productName: string;
+  customerKey: string;
+  customerName: string;
+  lotCode: string;
+  bestBefore: string;
+  productionDate: string;
+  expiryDate: string;
+  netWeight: string;
+  updatedAt: string;
+  templateId?: number;
   templateName?: string;
-  templateUpdatedAt?: string | null;
+  templateUpdatedAt?: string;
+  batchTicketDate?: string;
+  packSize1?: string;
+  packUnit1?: string;
+  packSize2?: string;
+  packUnit2?: string;
+  totalUnit2InUnit1?: number;
+  netWeight1?: number;
+  shelfLifeMonth?: number;
+  shelfLifeDay?: number;
+  allergen1?: string;
+  allergen2?: string;
+  allergen3?: string;
+  storageCondition?: string;
+  totalBags?: number;
 }
 
 interface Template {
@@ -64,10 +146,14 @@ function BatchSearch() {
   const router = useRouter();
   const { t } = useTranslation();
   const [batches, setBatches] = useState<Batch[]>([]);
+  const [filteredBatches, setFilteredBatches] = useState<Batch[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [printers, setPrinters] = useState<Printer[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchText, setSearchText] = useState('');
+  const [batchSearchText, setBatchSearchText] = useState('');
+  const [lotCodeSearchText, setLotCodeSearchText] = useState('');
   const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([null, null]);
   const [printModalVisible, setPrintModalVisible] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
@@ -80,6 +166,19 @@ function BatchSearch() {
   const printFrameRef = useRef<HTMLIFrameElement>(null);
   const previewCanvasRef = useRef<HTMLDivElement>(null);
   const [systemPrinters, setSystemPrinters] = useState<string[]>([]);
+  
+  // เพิ่มตัวแปรสำหรับ BatchPreviewModal
+  const [batchPreviewModalVisible, setBatchPreviewModalVisible] = useState(false);
+  const [batchPreviewLoading, setBatchPreviewLoading] = useState(false);
+  const [previewBatchNo, setPreviewBatchNo] = useState<string | null>(null);
+  const [htmlZplPreview, setHtmlZplPreview] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [startBag, setStartBag] = useState<number>(1);
+  const [endBag, setEndBag] = useState<number>(1);
+  const [qcSample, setQcSample] = useState<boolean>(false);
+  const [formSheet, setFormSheet] = useState<boolean>(false);
+  const [palletTag, setPalletTag] = useState<boolean>(false);
+  const [templateID, setTemplateID] = useState<number | null>(null);
   
   // คงค่าไว้ระหว่าง renders
   const apiCallInProgress = useRef(false);
@@ -134,13 +233,113 @@ function BatchSearch() {
     }
   }, []);
 
-  const fetchBatchesData = useCallback(async () => {
+  const fetchBatchesData = useCallback(async (batchNo: string | null = null, lotCode: string | null = null) => {
+    setLoading(true);
+    setError(null);
     try {
-      const response = await api.get('/api/batches/current');
-      return response.data;
-    } catch (error) {
-      console.error('Error fetching batches data:', error);
+      // Use the correct SQL VIEW FgL.vw_Label_PrintData
+      const endpoint = '/api/batches/labelview';
+      
+      // Create URL params
+      const params = new URLSearchParams();
+      if (batchNo) params.append('batchNo', batchNo);
+      if (lotCode) params.append('lotCode', lotCode);
+      
+      // Send request to API
+      const response = await fetch(`${endpoint}?${params.toString()}`);
+      
+      if (!response.ok) {
+        throw new Error(`API request failed with status ${response.status}`);
+      }
+      
+      // Transform data from API response
+      const data = await response.json();
+      
+      // Process data to match required table structure
+      const processedData = data.map((v:any)=> extractBatchData(v));
+      
+      setBatches(processedData);
+      setFilteredBatches(processedData);
+      
+      // If searching by BatchNo and only one result found, show Label template immediately
+      if (batchNo && processedData.length === 1) {
+        const batch = processedData[0];
+        setSelectedBatch(batch);
+        
+        // If templateId exists, show Label template
+        if (batch.templateId) {
+          setTimeout(() => {
+            openPrintModal(batch);
+          }, 500);
+        } else {
+          // If no templateId but has productKey and customerKey, search for a matching template
+          fetchTemplateForBatch(batch);
+        }
+      }
+      
+      // Return processed data
+      return processedData;
+    } catch (error: any) {
+      console.error('Error fetching batches:', error);
+      setError(error.message || 'Error retrieving data');
       return [];
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Function to search for a suitable template for a batch
+  const fetchTemplateForBatch = async (batch: Batch) => {
+    if (!batch.productKey && !batch.customerKey) {
+      message.warning('No Product Key or Customer Key data to search for a Template');
+      return;
+    }
+    
+    try {
+      // Search for a template that matches productKey or customerKey
+      const templatesData = templatesCache.current.length > 0 
+        ? templatesCache.current 
+        : await fetchTemplates();
+      
+      // Find template that best matches the conditions
+      let matchedTemplate = templatesData.find((template: Template) => 
+        template.productKey === batch.productKey && template.customerKey === batch.customerKey
+      );
+      
+      // If no template matches both productKey and customerKey, try matching one of them
+      if (!matchedTemplate) {
+        matchedTemplate = templatesData.find((template: Template) => 
+          template.productKey === batch.productKey || template.customerKey === batch.customerKey
+        );
+      }
+      
+      if (matchedTemplate) {
+        // Update batch with found template
+        const updatedBatch = {
+          ...batch,
+          templateId: matchedTemplate.templateID,
+          templateName: matchedTemplate.name,
+          templateUpdatedAt: matchedTemplate.updatedAt
+        };
+        
+        // Update selectedBatch and show Label template
+        setSelectedBatch(updatedBatch);
+        setTimeout(() => {
+          openPrintModal(updatedBatch);
+        }, 500);
+      } else {
+        message.info('No suitable Template found for this Batch');
+      }
+    } catch (error) {
+      console.error('Error finding template for batch:', error);
+      message.error('Error searching for Template');
+    }
+  };
+
+  // Try to detect system printers using browser APIs
+  const detectSystemPrinters = useCallback(() => {
+    if (navigator.userAgent.includes('Chrome') && 'print' in window) {
+      setSystemPrinters(['System Default Printer']);
     }
   }, []);
 
@@ -180,6 +379,9 @@ function BatchSearch() {
       });
       
       setBatches(matchedBatches);
+      setFilteredBatches(matchedBatches);
+      
+      // ไม่ต้องเปิด Preview อัตโนมัติที่นี่ - จะใช้ useEffect แทน
     } catch (error) {
       message.error('Error loading data');
       console.error('Error in fetchAndMatchData:', error);
@@ -188,13 +390,6 @@ function BatchSearch() {
       apiCallInProgress.current = false;
     }
   }, [fetchBatchesData, fetchTemplates, isAuthenticated]);
-
-  // Try to detect system printers using browser APIs
-  const detectSystemPrinters = useCallback(() => {
-    if (navigator.userAgent.includes('Chrome') && 'print' in window) {
-      setSystemPrinters(['System Default Printer']);
-    }
-  }, []);
 
   // Initial setup
   useEffect(() => {
@@ -290,12 +485,13 @@ function BatchSearch() {
       
       console.log("Template data found:", contentObj.elements.length, "elements");
       
-      // Generate HTML preview
-      const previewHtml = generatePreviewHtml(contentObj, currentBatch);
+      // Replace variables with batch data
+      const extractedData = extractBatchData(currentBatch);
+      const previewHtml = generatePreviewHtml(contentObj, extractedData);
       setTemplatePreview(previewHtml);
       
       // Generate PDF preview
-      await generatePdfPreview(contentObj, currentBatch);
+      await generatePdfPreview(contentObj, extractedData);
       
     } catch (error) {
       console.error('Error fetching template preview:', error);
@@ -366,8 +562,16 @@ function BatchSearch() {
             
             // Replace variables with batch data
             txt = txt.replace(/{batchNo}/g, batch.batchNo || '')
-                   .replace(/{productKey}/g, batch.productKey || '')
-                   .replace(/{customerKey}/g, batch.customerKey || '');
+                 .replace(/{productKey}/g, batch.productKey || '')
+                 .replace(/{productName}/g, batch.productName || '')
+                 .replace(/{customerKey}/g, batch.customerKey || '')
+                 .replace(/{customerName}/g, batch.customerName || '')
+                 .replace(/{bagNo}/g, batch.bagNo || '')
+                 .replace(/{lotCode}/g, batch.lotCode || '')
+                 .replace(/{bestBefore}/g, batch.bestBefore || '')
+                 .replace(/{netWeight}/g, batch.netWeight || '')
+                 .replace(/{productionDate}/g, formatDateTime(batch.productionDate) || '')
+                 .replace(/{expiryDate}/g, formatDateTime(batch.expiryDate) || '');
             
             pdf.setFontSize(fontSize);
             pdf.setTextColor(0, 0, 0);
@@ -422,7 +626,9 @@ function BatchSearch() {
                   // Replace variables with batch data
                   value = value.replace(/{batchNo}/g, batch.batchNo || '')
                           .replace(/{productKey}/g, batch.productKey || '')
-                          .replace(/{customerKey}/g, batch.customerKey || '');
+                          .replace(/{customerKey}/g, batch.customerKey || '')
+                          .replace(/{bagNo}/g, batch.bagNo || '')
+                          .replace(/{lotCode}/g, batch.lotCode || '');
                   
                   try {
                     JsBarcode(canvas, value, {
@@ -447,10 +653,16 @@ function BatchSearch() {
                 else if (el.type === 'qr' && QRCode) {
                   let value = el.value || '';
                   
-                  // Replace variables with batch data
+                  // แทนที่ตัวแปรต่างๆ
                   value = value.replace(/{batchNo}/g, batch.batchNo || '')
                           .replace(/{productKey}/g, batch.productKey || '')
-                          .replace(/{customerKey}/g, batch.customerKey || '');
+                          .replace(/{productName}/g, batch.productName || '')
+                          .replace(/{customerKey}/g, batch.customerKey || '')
+                          .replace(/{customerName}/g, batch.customerName || '')
+                          .replace(/{bagNo}/g, batch.bagNo || '')
+                          .replace(/{lotCode}/g, batch.lotCode || '')
+                          .replace(/{bestBefore}/g, batch.bestBefore || '')
+                          .replace(/{netWeight}/g, batch.netWeight || '');
                   
                   try {
                     await QRCode.toCanvas(canvas, value, {
@@ -468,7 +680,7 @@ function BatchSearch() {
                     console.error("Error generating QR code:", qrErr);
                     // Fallback text
                     pdf.setFontSize(10);
-                    pdf.text(`QR CODE: ${value}`, x + 5, y + h/2);
+                    pdf.text(`QR CODE`, x + 5, y + h/2);
                   }
                 } else {
                   // Fallback for when libraries are not available
@@ -558,26 +770,35 @@ function BatchSearch() {
           const color = e.fill || '#000';
           const align = e.align || 'center';
           
-          // Replace batch variables
+          // Replace variables with batch data
           txt = txt.replace(/{batchNo}/g, batch.batchNo || '')
                   .replace(/{productKey}/g, batch.productKey || '')
-                  .replace(/{customerKey}/g, batch.customerKey || '');
+                  .replace(/{productName}/g, batch.productName || '')
+                  .replace(/{customerKey}/g, batch.customerKey || '')
+                  .replace(/{customerName}/g, batch.customerName || '')
+                  .replace(/{bagNo}/g, batch.bagNo || '')
+                  .replace(/{lotCode}/g, batch.lotCode || '')
+                  .replace(/{bestBefore}/g, batch.bestBefore || '')
+                  .replace(/{netWeight}/g, batch.netWeight || '')
+                  .replace(/{productionDate}/g, formatDateTime(batch.productionDate) || '')
+                  .replace(/{expiryDate}/g, formatDateTime(batch.expiryDate) || '');
           
           return `<div style="position:absolute;left:${x}px;top:${y}px;
             width:${w}px;height:${h}px;font-size:${fontSize}px;
             font-family:${fontFamily};color:${color};
-            display:flex;align-items:center;justify-content:${align};
+            display:flex;align-items:center;justify-content:${align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'};
             ${e.fontWeight ? `font-weight:${e.fontWeight};` : ''}
             ${e.fontStyle ? `font-style:${e.fontStyle};` : ''}
             overflow:hidden;word-break:break-word;">${txt}</div>`;
         }
         
         if (e.type === 'barcode') {
-          // For barcodes, use the batch-search.tsx codebase's barcodeDataUrls if available
-          // Otherwise, create a placeholder for visual representation
-          const value = (e.value || '').replace(/{batchNo}/g, batch.batchNo || '')
+          // Generate barcode based on batch data with variable replacement
+          let value = (e.value || '').replace(/{batchNo}/g, batch.batchNo || '')
                         .replace(/{productKey}/g, batch.productKey || '')
-                        .replace(/{customerKey}/g, batch.customerKey || '');
+                        .replace(/{customerKey}/g, batch.customerKey || '')
+                        .replace(/{bagNo}/g, batch.bagNo || '')
+                        .replace(/{lotCode}/g, batch.lotCode || '');
                         
           // Create a barcode dynamically using JsBarcode if available
           if (isClient && JsBarcode) {
@@ -610,11 +831,18 @@ function BatchSearch() {
         }
         
         if (e.type === 'qr') {
-          // For QR codes, create a visual representation or generate dynamically
-          const value = (e.value || '').replace(/{batchNo}/g, batch.batchNo || '')
-                        .replace(/{productKey}/g, batch.productKey || '')
-                        .replace(/{customerKey}/g, batch.customerKey || '');
-                        
+          // Generate QR code with variable replacement or use the entire batch data as QR content
+          let value = e.value || '';
+          
+          // แทนที่ตัวแปรต่างๆ
+          value = value.replace(/{batchNo}/g, batch.batchNo || '')
+                    .replace(/{productKey}/g, batch.productKey || '')
+                    .replace(/{customerKey}/g, batch.customerKey || '')
+                    .replace(/{bagNo}/g, batch.bagNo || '')
+                    .replace(/{lotCode}/g, batch.lotCode || '')
+                    .replace(/{bestBefore}/g, batch.bestBefore || '')
+                    .replace(/{netWeight}/g, batch.netWeight || '');
+          
           // Use QRCode library if available
           if (isClient && QRCode) {
             try {
@@ -626,7 +854,7 @@ function BatchSearch() {
               const dataUrl = canvas.toDataURL('image/png');
               return `<div style="position:absolute;left:${x}px;top:${y}px;
                 width:${w}px;height:${h}px;overflow:hidden;">
-                <img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain;" alt="QR Code: ${value}"/>
+                <img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain;" alt="QR Code"/>
               </div>`;
             } catch (err) {
               console.error("Error generating QR code:", err);
@@ -639,7 +867,7 @@ function BatchSearch() {
             border:1px dashed #999;background:#f7f7f7;
             display:flex;align-items:center;justify-content:center;
             font-size:12px;font-family:Arial,sans-serif;">
-            QR CODE: ${value}</div>`;
+            QR CODE</div>`;
         }
         
         if (e.type === 'rect') {
@@ -688,41 +916,9 @@ function BatchSearch() {
     }
   };
 
-  // Improved function to open print modal
-  const openPrintModal = useCallback(async (batch: Batch) => {
-    if (!batch?.batchNo) {
-      message.error('Batch data not found');
-      return;
-    }
-    
-    // Set selected batch before calling fetchTemplatePreview
-    setSelectedBatch(batch);
-    setCopies(1);
-    setSelectedPrinter(-1); // default "System"
-    setPrintModalVisible(true);
-    setLoadingPreview(true);
-    
-    try {
-      // Check templateId before calling fetchTemplatePreview
-      if (batch.templateId) {
-        await fetchTemplatePreview(batch.templateId, batch);
-      } else {
-        // When no templateId found
-        console.warn("No templateId found for batch", batch.batchNo);
-        setTemplatePreview('<div style="padding:20px;text-align:center;">No template found for this batch</div>');
-        setPdfPreviewUrl(null);
-      }
-    } catch (err) {
-      console.error("Error opening print modal:", err);
-      setTemplatePreview('<div style="padding:20px;text-align:center;">Error loading template</div>');
-    } finally {
-      setLoadingPreview(false);
-    }
-  }, []);
-
-  // useMemo สำหรับการกรองข้อมูล เพื่อป้องกันการคำนวณทุกครั้งที่ render
-  const filteredBatches = useMemo(() => {
-    return batches.filter(batch => {
+  // Apply filter whenever the dependencies change
+  useEffect(() => {
+    const filtered = batches.filter(batch => {
       const matchesSearch = searchText === '' || 
         batch.batchNo.toLowerCase().includes(searchText.toLowerCase()) ||
         (batch.productKey?.toLowerCase().includes(searchText.toLowerCase())) ||
@@ -735,6 +931,11 @@ function BatchSearch() {
   
       return matchesSearch && matchesDateRange;
     });
+    
+    setFilteredBatches(filtered);
+    
+    // เราจะไม่ใช้การเปิด Preview อัตโนมัติที่นี่เนื่องจากมีปัญหากับการอ้างอิง openPrintModal
+    // ลูกค้าสามารถเพิ่มฟีเจอร์นี้ในภายหลังหรือเมื่อจำเป็น
   }, [batches, searchText, dateRange]);
 
   // พิมพ์โดยตรงจากข้อมูล batch ที่เลือก
@@ -1002,53 +1203,6 @@ function BatchSearch() {
     }
   };
 
-  // columns with formatDateTime date formatter
-  const cols = useMemo(()=>[
-    {title:'Batch No', dataIndex:'batchNo', sorter:(a:Batch,b:Batch)=>a.batchNo.localeCompare(b.batchNo)},
-    {title:'Product',  dataIndex:'productKey', sorter:(a:Batch,b:Batch)=>(a.productKey||'').localeCompare(b.productKey||'')},
-    {title:'Customer', dataIndex:'customerKey'},
-    {title:'Template', dataIndex:'templateName'},
-    {
-      title:'Last Updated', key:'last',
-      render:(_:any,r:Batch)=> formatDateTime(r.templateUpdatedAt||r.updatedAt)||'-',
-      sorter:(a:Batch,b:Batch)=>{
-        const A=new Date(a.templateUpdatedAt||a.updatedAt).getTime();
-        const B=new Date(b.templateUpdatedAt||b.updatedAt).getTime(); return A-B;
-      }
-    },{
-      title:'Action',key:'act',render:(_:any,r:Batch)=>(
-        <Space>
-          <Tooltip title="Print Directly">
-            <Button 
-              type='primary' 
-              icon={<PrinterOutlined/>} 
-              onClick={()=>printDirectly(r)}
-              loading={isPrinting && selectedBatch?.batchNo === r.batchNo}
-            >
-              Print
-            </Button>
-          </Tooltip>
-          <Tooltip title="Open Print Preview">
-            <Button 
-              icon={<FileTextOutlined/>} 
-              onClick={()=>openPrintModal(r)}
-            >
-              Preview
-            </Button>
-          </Tooltip>
-          <Button 
-            icon={<EditOutlined/>} 
-            onClick={()=>router.push(
-              r.templateId?`/templates/designer/${r.templateId}`:
-              `/templates/designer?productKey=${r.productKey}&customerKey=${r.customerKey}`
-            )}
-          >
-            Edit Template
-          </Button>
-        </Space>)
-    }
-  ],[openPrintModal, router, printDirectly, selectedBatch, isPrinting]);
-
   // useMemo สำหรับ printers เพื่อป้องกันการสร้างอาร์เรย์ใหม่ทุกครั้งที่ render
   const allPrinters = useMemo(() => [
     ...printers,
@@ -1152,6 +1306,395 @@ function BatchSearch() {
     router.push('/templates/management');
   };
 
+  // Improved function to open print modal
+  const openPrintModal = useCallback(async (batch: Batch) => {
+    if (!batch?.batchNo) {
+      message.error('Batch data not found');
+      return;
+    }
+    
+    // Set selected batch before calling fetchTemplatePreview
+    setSelectedBatch(batch);
+    setCopies(1);
+    setSelectedPrinter(allPrinters[0]?.id ?? -1); // ปรับใช้ printer ตัวแรกเป็นค่าเริ่มต้น
+    setPrintModalVisible(true);
+    setLoadingPreview(true);
+    
+    try {
+      // Check templateId before calling fetchTemplatePreview
+      if (batch.templateId) {
+        await fetchTemplatePreview(batch.templateId, batch);
+      } else {
+        // When no templateId found
+        console.warn("No templateId found for batch", batch.batchNo);
+        setTemplatePreview('<div style="padding:20px;text-align:center;">No template found for this batch</div>');
+        setPdfPreviewUrl(null);
+      }
+    } catch (err) {
+      console.error("Error opening print modal:", err);
+      setTemplatePreview('<div style="padding:20px;text-align:center;">Error loading template</div>');
+    } finally {
+      setLoadingPreview(false);
+    }
+  }, [allPrinters]);
+
+  // columns with formatDateTime date formatter
+  const cols = useMemo(()=>[
+    {title:'Batch No', dataIndex:'batchNo', sorter:(a:Batch,b:Batch)=>a.batchNo.localeCompare(b.batchNo)},
+    {title:'Batch Date', dataIndex:'batchTicketDate', 
+     render:(_:any,r:Batch)=> formatDateTime(r.batchTicketDate)||'-'},
+    {title:'Product',  dataIndex:'productKey', sorter:(a:Batch,b:Batch)=>(a.productKey||'').localeCompare(b.productKey||'')},
+    {title:'Product Name', dataIndex:'productName'},
+    {title:'Customer', dataIndex:'customerKey'},
+    {title:'Customer Name', dataIndex:'customerName'},
+    {title:'Template', dataIndex:'templateName',
+     render:(_:any,r:Batch)=> r.templateId
+       ? <Tag color="green">{r.templateName}</Tag>
+       : <Tag color="red">No-Template</Tag>},
+    {
+      title:'Last Updated', key:'last',
+      render:(_:any,r:Batch)=> formatDateTime(r.templateUpdatedAt||r.updatedAt)||'-',
+      sorter:(a:Batch,b:Batch)=>{
+        const A=new Date(a.templateUpdatedAt||a.updatedAt).getTime();
+        const B=new Date(b.templateUpdatedAt||b.updatedAt).getTime(); return A-B;
+      }
+    },{
+      title:'Action',key:'act',render:(_:any,r:Batch)=>(
+        <Space>
+          <Tooltip title="Print Directly">
+            <Button 
+              type='primary' 
+              icon={<PrinterOutlined/>} 
+              onClick={()=>printDirectly(r)}
+              loading={isPrinting && selectedBatch?.batchNo === r.batchNo}
+            >
+              Print
+            </Button>
+          </Tooltip>
+          <Tooltip title="Open Print Preview">
+            <Button 
+              icon={<FileTextOutlined/>} 
+              onClick={()=>openPrintModal(r)}
+            >
+              Preview
+            </Button>
+          </Tooltip>
+          <Button 
+            icon={<EditOutlined/>} 
+            onClick={()=>router.push(
+              r.templateId?`/templates/designer/${r.templateId}`:
+              `/templates/designer?productKey=${r.productKey}&customerKey=${r.customerKey}`
+            )}
+          >
+            Edit Template
+          </Button>
+        </Space>)
+    }
+  ],[openPrintModal, router, printDirectly, selectedBatch, isPrinting]);
+
+  // Function to search by BatchNo and display Template immediately
+  const handleBatchSearch = useCallback(async () => {
+    if (!batchSearchText || batchSearchText.trim() === '') {
+      message.warning('Please enter a Batch number to search');
+      return;
+    }
+    
+    // Call fetchBatchesData to search for data
+    const batchData = await fetchBatchesData(batchSearchText.trim(), null);
+    
+    // If a single batch is found, show Label template immediately
+    if (batchData && batchData.length === 1) {
+      const batch = batchData[0];
+      setSelectedBatch(batch);
+      
+      // If templateId exists, show Label template
+      if (batch.templateId) {
+        setTimeout(() => {
+          openPrintModal(batch);
+        }, 500);
+      } else {
+        // If no templateId but has productKey and customerKey, search for a matching template
+        await fetchTemplateForBatch(batch);
+      }
+    } else if (batchData && batchData.length > 1) {
+      message.info(`Found ${batchData.length} records matching your search`);
+    } else {
+      message.info('No Batch records found');
+    }
+  }, [batchSearchText, fetchBatchesData, openPrintModal]);
+
+  // ปรับปรุงการค้นหาแบบ debounce
+  const debouncedSearch = useCallback(
+    debounce((value: string) => {
+      setBatchSearchText(value);
+      
+      // เรียกใช้ preview modal เมื่อ BatchNo ตรงกับรูปแบบ 6 ตัวอักษร
+      if (/^[A-Za-z0-9]{6}$/.test(value)) {
+        handlePreviewBatch(value);
+      }
+    }, 300),
+    []
+  );
+  
+  // ฟังก์ชัน search batch แบบ auto-complete หลังจากพิมพ์ 3 ตัวอักษร
+  const searchBatchOptions = useCallback(
+    debounce(async (value: string) => {
+      if (value.length < 3) return;
+      
+      try {
+        const response = await api.get('/api/batches', {
+          params: { batchNo: value, limit: 10 }
+        });
+        
+        if (response.data && Array.isArray(response.data)) {
+          const options = response.data.map((batch: any) => ({
+            value: batch.batchNo || batch.BatchNo,
+            label: `${batch.batchNo || batch.BatchNo} - ${batch.productName || batch.ProductName || 'Unknown Product'}`
+          }));
+          
+          setFilteredBatches(response.data.map(extractBatchData));
+        }
+      } catch (error) {
+        console.error('Error searching batches:', error);
+      }
+    }, 300),
+    []
+  );
+  
+  // ฟังก์ชัน fetch ข้อมูลสำหรับดูตัวอย่าง label
+  const handlePreviewBatch = async (batchNo: string) => {
+    setBatchPreviewLoading(true);
+    setPreviewBatchNo(batchNo);
+    setPreviewError(null);
+    
+    try {
+      const response = await api.get(`/api/batch/${batchNo}/preview`);
+      
+      if (response.data) {
+        setHtmlZplPreview(response.data.content || '');
+        setTemplateID(response.data.templateID);
+        setEndBag(response.data.dataRows?.length || 1);
+        setBatchPreviewModalVisible(true);
+      }
+    } catch (error: any) {
+      console.error('Error fetching batch preview:', error);
+      setPreviewError(`ไม่สามารถดึงข้อมูลตัวอย่าง: ${error.message || 'ไม่ทราบสาเหตุ'}`);
+      setHtmlZplPreview('<div style="padding:20px;color:red;">ไม่พบแม่แบบสำหรับ Batch นี้</div>');
+    } finally {
+      setBatchPreviewLoading(false);
+    }
+  };
+  
+  // ฟังก์ชัน handle การพิมพ์จาก preview modal
+  const handlePrintFromPreview = async () => {
+    if (!previewBatchNo) return;
+    
+    try {
+      setIsPrinting(true);
+      
+      const response = await api.post('/api/print', {
+        batchNo: previewBatchNo,
+        startBag: startBag,
+        endBag: endBag,
+        qcSample: qcSample,
+        formSheet: formSheet,
+        palletTag: palletTag,
+        templateID: templateID,
+        printerID: selectedPrinter
+      });
+      
+      if (response.data && response.data.success) {
+        message.success(`Print job created successfully! Job ID: ${response.data.jobId}`);
+        setBatchPreviewModalVisible(false);
+      } else {
+        message.error('Failed to create print job');
+      }
+    } catch (error: any) {
+      console.error('Error creating print job:', error);
+      message.error(`Failed to create print job: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+  
+  // ฟังก์ชัน handle แก้ไขแม่แบบ
+  const handleEditTemplateFromPreview = () => {
+    if (!templateID) {
+      message.warning('No template associated with this batch');
+      return;
+    }
+    
+    router.push(`/templates/${templateID}/edit`);
+  };
+  
+  // คอมโพเนนต์ BatchPreviewModal
+  const BatchPreviewModal = () => {
+    const { TabPane } = Tabs;
+    
+    return (
+      <Modal
+        title={`ตัวอย่างฉลาก: ${previewBatchNo || ''}`}
+        visible={batchPreviewModalVisible}
+        onCancel={() => setBatchPreviewModalVisible(false)}
+        width={800}
+        footer={[
+          <Button key="edit" type="default" onClick={handleEditTemplateFromPreview} icon={<EditOutlined />}>
+            แก้ไขแม่แบบ
+          </Button>,
+          <Button key="print" type="primary" onClick={handlePrintFromPreview} loading={isPrinting} icon={<PrinterOutlined />}>
+            พิมพ์
+          </Button>
+        ]}
+      >
+        <Spin spinning={batchPreviewLoading}>
+          {previewError && <div className="error-message">{previewError}</div>}
+          
+          <Tabs defaultActiveKey="label">
+            <TabPane tab="ฉลาก" key="label">
+              <div style={{ border: '1px solid #ccc', minHeight: '300px', padding: '10px' }}>
+                {htmlZplPreview ? (
+                  <iframe 
+                    srcDoc={htmlZplPreview}
+                    style={{ width: '100%', height: '400px', border: 'none' }}
+                  />
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '20px' }}>
+                    ไม่มีข้อมูลตัวอย่าง
+                  </div>
+                )}
+              </div>
+            </TabPane>
+            
+            <TabPane tab="ตั้งค่า" key="settings">
+              <div style={{ padding: '10px' }}>
+                <div style={{ marginBottom: '15px' }}>
+                  <div style={{ marginBottom: '8px' }}>ช่วงถุง:</div>
+                  <Space>
+                    <span>ถุงเริ่มต้น:</span>
+                    <InputNumber 
+                      min={1} 
+                      value={startBag} 
+                      onChange={(value) => setStartBag(value || 1)} 
+                    />
+                    
+                    <span>ถุงสุดท้าย:</span>
+                    <InputNumber 
+                      min={1} 
+                      value={endBag} 
+                      onChange={(value) => setEndBag(value || 1)} 
+                    />
+                  </Space>
+                </div>
+                
+                <div style={{ marginBottom: '15px' }}>
+                  <div style={{ marginBottom: '8px' }}>พิมพ์พิเศษ:</div>
+                  <Space direction="vertical">
+                    <Checkbox checked={qcSample} onChange={(e) => setQcSample(e.target.checked)}>
+                      QC SAMPLE
+                    </Checkbox>
+                    <Checkbox checked={formSheet} onChange={(e) => setFormSheet(e.target.checked)}>
+                      FORM SHEET
+                    </Checkbox>
+                    <Checkbox checked={palletTag} onChange={(e) => setPalletTag(e.target.checked)}>
+                      PALLET TAG
+                    </Checkbox>
+                  </Space>
+                </div>
+                
+                <div>
+                  <div style={{ marginBottom: '8px' }}>เครื่องพิมพ์:</div>
+                  <Select
+                    style={{ width: '100%' }}
+                    placeholder="เลือกเครื่องพิมพ์"
+                    value={selectedPrinter}
+                    onChange={(value) => setSelectedPrinter(value)}
+                  >
+                    {printers.map((printer) => (
+                      <Select.Option key={printer.id} value={printer.id}>
+                        {printer.name}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+            </TabPane>
+          </Tabs>
+        </Spin>
+      </Modal>
+    );
+  };
+
+  // ปรับปรุงการ handle ที่อยู่ในฟอร์ม Search
+  const handleSearch = () => {
+    fetchAndMatchData();
+  };
+  
+  // เพิ่มฟังก์ชัน fetchBatches ที่เรียกใช้ในฟอร์ม
+  const fetchBatches = () => {
+    templatesCache.current = [];
+    fetchAndMatchData();
+  };
+  
+  // ใช้ AutoComplete แทน Input สำหรับ BatchNo
+  const renderSearchForm = () => {
+    return (
+      <div className={styles.searchForm}>
+        <AutoComplete
+          style={{ width: 200 }}
+          placeholder="รหัส Batch"
+          value={searchText}
+          onChange={(value) => {
+            setSearchText(value);
+            debouncedSearch(value);
+            if (value.length >= 3) {
+              searchBatchOptions(value);
+            }
+          }}
+          options={filteredBatches.map(batch => ({
+            value: batch.batchNo,
+            label: `${batch.batchNo} - ${batch.productName || 'Unknown'}`
+          }))}
+          filterOption={false}
+          onSelect={(value) => {
+            setSearchText(value);
+            debouncedSearch(value);
+          }}
+        />
+        
+        <Input 
+          placeholder="รหัส Lot" 
+          value={lotCodeSearchText}
+          onChange={(e) => setLotCodeSearchText(e.target.value)}
+          style={{ width: 200 }}
+        />
+        
+        <DatePicker.RangePicker 
+          onChange={(dates) => {
+            setDateRange(dates ? [
+              dates[0]?.toDate() || null, 
+              dates[1]?.toDate() || null
+            ] : [null, null]);
+          }}
+        />
+        
+        <Button 
+          type="primary" 
+          onClick={handleSearch} 
+          icon={<SearchOutlined />}
+        >
+          ค้นหา
+        </Button>
+        
+        <Button 
+          onClick={fetchBatches} 
+          icon={<ReloadOutlined />}
+        >
+          รีเฟรช
+        </Button>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* hidden frame */}
@@ -1171,15 +1714,10 @@ function BatchSearch() {
       {/* main */}
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="bg-white shadow-md p-6 rounded">
-          <h2 className="text-2xl font-bold mb-4 text-gray-800">{t('Batch Search')}</h2>
+          <h2 className="text-2xl font-bold mb-4 text-gray-800">Batch Search</h2>
           <Space className="mb-4 w-full justify-between">
             <Space>
-              <Input
-                placeholder="Search…" prefix={<SearchOutlined/>}
-                value={searchText} onChange={e=>setSearchText(e.target.value)} style={{width:260}}
-              />
-              <DatePicker.RangePicker onChange={v=>setDateRange(v as any)} />
-              <Button icon={<ReloadOutlined/>} onClick={()=>{templatesCache.current=[];fetchAndMatchData();}} loading={loading}>Refresh</Button>
+              {renderSearchForm()}
             </Space>
             <Space>
               <Button type="primary" icon={<PlusOutlined/>} onClick={()=>router.push('/templates/designer')}>Create Template</Button>
@@ -1193,16 +1731,34 @@ function BatchSearch() {
       </main>
 
       {/* print modal */}
-      <Modal title="Print Label" open={printModalVisible}
-             onCancel={()=>setPrintModalVisible(false)}
-             onOk={printWithSystem} okText="Print" width={900}>
+      <Modal 
+        title="Label Preview" 
+        open={printModalVisible}
+        onCancel={()=>setPrintModalVisible(false)}
+        onOk={printWithSystem} 
+        okText="Print" 
+        width={900}
+        footer={[
+          <Button key="edit" icon={<EditOutlined />} onClick={() => selectedBatch && handleEditTemplate(selectedBatch)}>
+            Edit Template
+          </Button>,
+          <Button key="cancel" onClick={() => setPrintModalVisible(false)}>
+            Cancel
+          </Button>,
+          <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={printWithSystem}>
+            Print
+          </Button>
+        ]}
+      >
         {selectedBatch && (
           <div className="grid grid-cols-2 gap-4">
             {/* info */}
             <div>
               <p><b>Batch No:</b> {selectedBatch.batchNo}</p>
               <p><b>Product Code:</b> {selectedBatch.productKey||'-'}</p>
+              <p><b>Product Name:</b> {selectedBatch.productName||'-'}</p>
               <p><b>Customer Code:</b> {selectedBatch.customerKey||'-'}</p>
+              <p><b>Customer Name:</b> {selectedBatch.customerName||'-'}</p>
               <p><b>Template:</b> {selectedBatch.templateName||'-'}</p>
               <div className="mt-3">
                 <label>Copies</label>
@@ -1214,16 +1770,16 @@ function BatchSearch() {
                   onClick={handleSavePdf}
                   disabled={!pdfDocRef.current}
                 >
-                  Save PDF
+                  Save as PDF
                 </Button>
               </div>
             </div>
             {/* preview */}
-            <div className="border h-[320px] overflow-auto">
+            <div className="border h-[400px] overflow-auto">
               {loadingPreview && (
                 <div className="flex items-center justify-center h-full">
                   <Spin />
-                  <span className="ml-2">Loading data...</span>
+                  <span className="ml-2">Loading...</span>
                 </div>
               )}
               {!loadingPreview && pdfPreviewUrl && (
@@ -1234,8 +1790,61 @@ function BatchSearch() {
                      style={{transform:'scale(0.6)',transformOrigin:'top left'}}/>
               )}
               {!loadingPreview && !pdfPreviewUrl && !templatePreview && (
-                <div className="flex items-center justify-center h-full text-red-500">
-                  Template data not found
+                <div className="flex flex-col items-center justify-center h-full">
+                  <div style={{
+                    width: '400px',
+                    borderRadius: '5px',
+                    border: '1px solid #ddd',
+                    padding: '20px',
+                    backgroundColor: 'white',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center'
+                  }}>
+                    {/* Label Header */}
+                    <div style={{ textAlign: 'center', marginBottom: '15px', width: '100%' }}>
+                      <div style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '10px' }}>
+                        {selectedBatch.productName || 'Marinade, Red Curry'}
+                      </div>
+                      <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'blue' }}>
+                        {selectedBatch.productKey || 'TSM16GB1'}
+                      </div>
+                    </div>
+                    
+                    {/* Label Details */}
+                    <div style={{ width: '100%', marginBottom: '15px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 5px' }}>
+                        <tbody>
+                          <tr>
+                            <td style={{ width: '40%', fontWeight: 'bold' }}>NET WEIGHT</td>
+                            <td>{selectedBatch.netWeight || selectedBatch.netWeight1 || '20.00'} {selectedBatch.packUnit1 || 'KG/CTN'}</td>
+                          </tr>
+                          <tr>
+                            <td style={{ fontWeight: 'bold' }}>LOT CODE</td>
+                            <td>
+                              {selectedBatch.lotCode || `${formatDateTime(selectedBatch.productionDate)?.slice(0, 10).replace(/\//g, '-')}`} {selectedBatch.batchNo}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style={{ fontWeight: 'bold' }}>BEST BEFORE</td>
+                            <td>{selectedBatch.bestBefore || formatDateTime(selectedBatch.expiryDate)?.slice(0, 10).replace(/\//g, '-')}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    
+                    {/* Allergen Information */}
+                    <div style={{ width: '100%', marginBottom: '15px', fontSize: '12px' }}>
+                      <p><strong>Allergens:</strong> {selectedBatch.allergen1 || 'Gluten (Wheat)'}</p>
+                      <p><strong>Recommended Storage:</strong> {selectedBatch.storageCondition || 'Store under dry cool condition'}</p>
+                    </div>
+                    
+                    {/* Barcode Area */}
+                    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginTop: '15px' }}>
+                      <img src="/barcode-placeholder.png" alt="Barcode" style={{ maxWidth: '80%', height: 'auto' }} />
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

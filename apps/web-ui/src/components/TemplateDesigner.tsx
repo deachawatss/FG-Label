@@ -17,11 +17,12 @@ if (isClient) {
 }
 
 import { useRouter } from 'next/router';
+import { truncateString } from '@/utils/string';
 
 const { Header, Sider, Content } = Layout;
 const { Option } = Select;
 
-const CANVAS_INIT = { width: 900, height: 500 };
+const CANVAS_INIT = { width: 400, height: 400 };    // 4"×4"
 const ZOOM_STEP = 0.1;
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 2.5;
@@ -135,8 +136,8 @@ const FEATURES = {
     STEP: 0.1,
   },
   CANVAS: {
-    INIT_WIDTH: 900,
-    INIT_HEIGHT: 500,
+    INIT_WIDTH: 400,
+    INIT_HEIGHT: 400,
   },
   KEYBOARD: {
     DELETE: 'Delete',
@@ -516,95 +517,137 @@ function normalizeElementColors(elements: ElementType[]): ElementType[] {
   });
 }
 
-export default function TemplateDesigner({ templateId, initialTemplate }: { templateId?: string, initialTemplate?: any }) {
-  const [canvasSize, setCanvasSize] = useState({ width: 900, height: 500 }); // Size of A6 landscape in pixels
-  const [elements, setElements] = useState<ElementType[]>([]);
+export default function TemplateDesigner({ templateId: templateIdProp, initialTemplate }: { templateId?: string, initialTemplate?: any }) {
+  // Initialize refs
+  const stageRef = useRef<any>(null);
+  const trRef = useRef<any>(null);
+  const selectionRef = useRef<{x: number, y: number, width: number, height: number}>({
+    x: 0, y: 0, width: 0, height: 0
+  });
+  
+  // Initialize state variables
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 400, height: 400 });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [zoom, setZoom] = useState(1);
-  const [showSettings, setShowSettings] = useState(false);
-  const [isSettingsVisible, setIsSettingsVisible] = useState(false); // เพิ่ม state นี้
-  const [isSaving, setIsSaving] = useState(false); // เพิ่ม state นี้
-  const [history, setHistory] = useState<string[]>([]);
-  const [future, setFuture] = useState<string[]>([]);
-  const [importModal, setImportModal] = useState(false);
-  const [importJson, setImportJson] = useState('');
+  const [elements, setElements] = useState<ElementType[]>([]);
+  const [history, setHistory] = useState<ElementType[][]>([[]]);
+  const [historyIndex, setHistoryIndex] = useState<number>(0);
   const [counter, setCounter] = useState<{ [key: string]: number }>({});
-  const stageRef = useRef<any>();
-  const trRef = useRef<any>();
-  const [qrDataUrls, setQrDataUrls] = useState<{ [id: string]: string }>({});
-  const [qrImages, setQrImages] = useState<{ [id: string]: HTMLImageElement }>({});
-  const [selectionVisible, setSelectionVisible] = useState(false);
-  const selectionRef = useRef<{ x: number; y: number; width: number; height: number }>({ x: 0, y: 0, width: 0, height: 0 });
-  const [, setDragSelection] = useState<{}>({});
-  const [barcodeDataUrls, setBarcodeDataUrls] = useState<{ [id: string]: string }>({});
-  const [barcodeImages, setBarcodeImages] = useState<{ [id: string]: HTMLImageElement }>({});
-  const [copiedElement, setCopiedElement] = useState<ElementType | null>(null);
-  const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [batchModalVisible, setBatchModalVisible] = useState(false);
-  const [batchNo, setBatchNo] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [editingText, setEditingText] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const [templateInfo, setTemplateInfo] = useState({
+  const [zoom, setZoom] = useState<number>(1);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [elementBeingCreated, setElementBeingCreated] = useState<string | null>(null);
+  const [temporaryElement, setTemporaryElement] = useState<ElementType | null>(null);
+  const [templateInfo, setTemplateInfo] = useState<any>({
     name: '',
     description: '',
     productKey: '',
-    customerKey: ''
+    customerKey: '',
+    paperSize: '4x4',
+    orientation: 'Portrait',
+    templateType: 'INNER'
   });
-  const [templateInfoModal, setTemplateInfoModal] = useState(false);
-  // เพิ่ม state สำหรับมาตรฐาน
-  const [labelStandard, setLabelStandard] = useState<'GMP' | 'EXPORT' | 'INTERNAL'>('GMP');
-  const [isEditMode, setIsEditMode] = useState<boolean>(!!templateId);
+  const [templateInfoModal, setTemplateInfoModal] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isEditMode, setIsEditMode] = useState<boolean>(!!templateIdProp);
+  const [templateId, setTemplateId] = useState<string | undefined>(templateIdProp);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [canvas, setCanvas] = useState<any>(null);
+  const [selectionVisible, setSelectionVisible] = useState<boolean>(false);
+  const [dragSelection, setDragSelection] = useState<{}>({});
+  const [qrDataUrls, setQrDataUrls] = useState<{[key: string]: string}>({});
+  const [qrImages, setQrImages] = useState<{[key: string]: HTMLImageElement}>({});
+  const [barcodeDataUrls, setBarcodeDataUrls] = useState<{[key: string]: string}>({});
+  const [barcodeImages, setBarcodeImages] = useState<{[key: string]: HTMLImageElement}>({});
+  const [copiedElement, setCopiedElement] = useState<ElementType | null>(null);
+  const [importJson, setImportJson] = useState<string>('');
+  const [importModal, setImportModal] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [batchNo, setBatchNo] = useState<string>('');
+  const [batchModalVisible, setBatchModalVisible] = useState<boolean>(false);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  
   const router = useRouter();
 
-  // ฟังก์ชันสำหรับตรวจสอบและแก้ไข Content ที่ไม่ถูกต้อง
+  // Define all state variables
+  const [labelStandard, setLabelStandard] = useState<'GMP' | 'EXPORT' | 'INTERNAL'>('GMP');
+  const [loading, setLoading] = useState<boolean>(false);
+  const [future, setFuture] = useState<ElementType[][]>([]);
+
+  // ฟังก์ชันสร้าง dataURL สำหรับ QR
+  async function updateQrDataUrl(el: ElementType) {
+    if (el.type === 'qr' && el.value) {
+      const url = await QRCode.toDataURL(el.value, { width: el.width, margin: 0 });
+      setQrDataUrls(prev => ({ ...prev, [el.id]: url }));
+    }
+  }
+
+  // ฟังก์ชันสร้าง dataURL สำหรับ Barcode (ใช้ jsbarcode)
+  async function updateBarcodeDataUrl(el: ElementType) {
+    if (el.type === 'barcode' && el.value) {
+      const canvas = document.createElement('canvas');
+      try {
+        JsBarcode(canvas, el.value, {
+          format: (el as BarcodeElement).format || 'CODE128',
+          width: 2,
+          height: el.height,
+          displayValue: false,
+          margin: 0,
+        });
+        const url = canvas.toDataURL('image/png');
+        setBarcodeDataUrls(prev => ({ ...prev, [el.id]: url }));
+      } catch (err) {
+        // handle error
+      }
+    }
+  }
+
+  // Function to check and fix Content
   const extractAndFixContent = (data: any) => {
-    // รองรับทั้ง Content (ตัวพิมพ์ใหญ่) และ content (ตัวพิมพ์เล็ก)
+    // Support both Content (uppercase) and content (lowercase)
     const rawContent = data.Content || data.content;
     if (!rawContent) {
-      console.warn("ไม่พบข้อมูล Content ในเทมเพลต");
+      console.warn("Content not found in template");
       return null;
     }
 
     try {
-      // ถ้าเป็น string ก็แปลงเป็น object
+      // If it's a string, convert to object
       if (typeof rawContent === 'string') {
-        console.log("กำลังแปลงข้อมูล Content:", rawContent.substring(0, 100) + "...");
+        console.log("Converting Content data:", rawContent.substring(0, 100) + "...");
         
-        // ตรวจสอบการถูกตัดกลางคันที่ 50000 ตัวอักษร
+        // Check if it was truncated at 50000 characters
         if (rawContent.length >= 50000) {
-          console.warn("พบข้อมูล Content ขนาดใหญ่ที่อาจถูกตัด", rawContent.length);
+          console.warn("Large Content data found that may be truncated", rawContent.length);
           
           try {
-            // พยายามซ่อมแซม JSON ที่ไม่สมบูรณ์
+            // Try to repair incomplete JSON
             let fixedContent = rawContent;
-            // ถ้าสิ้นสุดด้วยเครื่องหมายคำพูดที่ไม่มีปิด ให้ปิดให้
+            // If it ends with an unclosed quote, close it
             if (fixedContent.endsWith('"') || fixedContent.endsWith("'")) {
               fixedContent += '"';
             }
             
-            // ปิดวงเล็บและเครื่องหมายปีกกาที่อาจขาดหายไป
+            // Close any missing brackets and braces
             let openBraces = (fixedContent.match(/\{/g) || []).length;
             let closeBraces = (fixedContent.match(/\}/g) || []).length;
             let openBrackets = (fixedContent.match(/\[/g) || []).length;
             let closeBrackets = (fixedContent.match(/\]/g) || []).length;
             
-            // เพิ่มวงเล็บปีกกาปิดที่ขาดหาย
+            // Add missing closing braces
             for (let i = 0; i < openBraces - closeBraces; i++) {
               fixedContent += '}';
             }
             
-            // เพิ่มวงเล็บเหลี่ยมปิดที่ขาดหาย
+            // Add missing closing brackets
             for (let i = 0; i < openBrackets - closeBrackets; i++) {
               fixedContent += ']';
             }
             
             return JSON.parse(fixedContent);
           } catch (repairError) {
-            console.error("ไม่สามารถซ่อมแซม JSON ที่ถูกตัดได้:", repairError);
+            console.error("Could not repair truncated JSON:", repairError);
             
-            // ถ้าไม่สามารถซ่อมแซมได้ ลองสร้างโครงสร้างข้อมูลเริ่มต้นแทน
+            // If repair fails, create default structure
             return {
               elements: [],
               canvasSize: { width: 900, height: 500 }
@@ -615,16 +658,16 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
         return JSON.parse(rawContent);
       }
       
-      // ถ้าเป็น object อยู่แล้วก็ใช้ได้เลย
+      // If it's already an object, use as is
       return rawContent; 
     } catch (e: any) {
       console.error('Error parsing template content:', e);
-      message.error(`เกิดข้อผิดพลาดในการอ่านข้อมูลเทมเพลต: ${e.message}`);
+      message.error(`Error reading template data: ${e.message}`);
       
-      // ถ้าแปลงไม่ได้ ให้คืนค่าโครงสร้างข้อมูลเริ่มต้น
+      // If conversion fails, return default structure
       return {
         elements: [],
-        canvasSize: { width: 900, height: 500 }
+        canvasSize: { width: 400, height: 400 }
       };
     }
   };
@@ -647,7 +690,10 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
             name: initialTemplate.Name || initialTemplate.name || '',
             description: initialTemplate.Description || initialTemplate.description || '',
             productKey: initialTemplate.ProductKey || initialTemplate.productKey || '',
-            customerKey: initialTemplate.CustomerKey || initialTemplate.customerKey || ''
+            customerKey: initialTemplate.CustomerKey || initialTemplate.customerKey || '',
+            paperSize: initialTemplate.PaperSize || initialTemplate.paperSize || '4x4',
+            orientation: initialTemplate.Orientation || initialTemplate.orientation || 'Portrait',
+            templateType: initialTemplate.TemplateType || initialTemplate.templateType || 'INNER'
           });
           
           // โหลด elements จาก Content
@@ -737,7 +783,10 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
           name: data.Name || data.name || '',
           description: data.Description || data.description || '',
           productKey: data.ProductKey || data.productKey || '',
-          customerKey: data.CustomerKey || data.customerKey || ''
+          customerKey: data.CustomerKey || data.customerKey || '',
+          paperSize: data.PaperSize || data.paperSize || '4x4',
+          orientation: data.Orientation || data.orientation || 'Portrait',
+          templateType: data.TemplateType || data.templateType || 'INNER'
         });
         
         // โหลด elements จาก Content
@@ -813,40 +862,40 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
     }
   }, [templateId, initialTemplate]);
 
-  // เมื่อเปลี่ยนมาตรฐาน ให้เปลี่ยน format ของ barcode ที่เลือกอยู่ (ถ้ามี)
-  useEffect(() => {
-    setElements(els => els.map(el => {
-      if (el.type === 'barcode') {
-        const allowed = BARCODE_FORMATS_BY_STANDARD[labelStandard];
-        // ถ้า format เดิมไม่อยู่ใน allowed ให้เปลี่ยนเป็นตัวแรก
-        if (!allowed.includes(el.format)) {
-          return { ...el, format: allowed[0] };
-        }
-      }
-      return el;
-    }));
-  }, [labelStandard]);
-
   // Undo/Redo
   const pushHistory = (els: ElementType[]) => {
-    // Deep clone elements to prevent reference issues
-    const clonedElements = els.map(el => {
-      const cloned = { ...el };
-      if (el.type === 'image' && 'imageObj' in el) {
-        delete (cloned as any).imageObj;  // Remove imageObj before storing
-      }
-      return cloned;
+    if (els.length === 0) return;
+    
+    setHistory(h => {
+      const newHistory = h.slice(0, historyIndex + 1);
+      newHistory.push([...els]);
+      return newHistory;
     });
-    setHistory(h => [...h, JSON.stringify(clonedElements)]);
+    
+    setHistoryIndex(i => i + 1);
+    setFuture([]);
   };
 
   const handleUndo = () => {
-    if (history.length > 0) {
-      setFuture(f => [JSON.stringify(elements), ...f]);
-      const prev = JSON.parse(history[history.length - 1]);
+    if (historyIndex > 0) {
+      // Deep clone elements to prevent reference issues
+      const clonedElements = elements.map(el => {
+        const cloned = { ...el };
+        if (el.type === 'image' && 'imageObj' in el) {
+          delete (cloned as any).imageObj;  // Remove imageObj before storing
+        }
+        return cloned;
+      });
+      
+      // Save current state to future for redo
+      setFuture(f => [clonedElements, ...f]);
+      
+      // Get previous state
+      setHistoryIndex(i => i - 1);
+      const prevState = history[historyIndex - 1];
       
       // Restore elements but rebuild image objects
-      const restoredElements = prev.map((el: ElementType) => {
+      const restoredElements = prevState.map((el: ElementType) => {
         if (el.type === 'image' && el.src) {
           // Re-create image object
           const img = new window.Image();
@@ -857,20 +906,82 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       });
       
       setElements(restoredElements);
-      setHistory(h => h.slice(0, h.length - 1));
       setSelectedIds([]);
     }
   };
 
   const handleRedo = () => {
     if (future.length > 0) {
-      pushHistory(elements);
-      const next = JSON.parse(future[0]);
-      setElements(next);
+      // Save current state for undo
+      setHistory(h => {
+        const newHistory = [...h];
+        newHistory[historyIndex + 1] = elements;
+        return newHistory;
+      });
+      
+      // Move to next state
+      setHistoryIndex(i => i + 1);
+      
+      // Restore next state
+      const nextState = future[0];
+      setElements(nextState);
       setFuture(f => f.slice(1));
       setSelectedIds([]);
     }
   };
+
+  // QR Code effects
+  useEffect(() => {
+    elements.forEach(el => {
+      if (el.type === 'qr' && el.value && !qrDataUrls[el.id]) {
+        updateQrDataUrl(el);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements]);
+
+  // โหลด image object จาก dataURL
+  useEffect(() => {
+    Object.entries(qrDataUrls).forEach(([id, url]) => {
+      if (!qrImages[id] && url) {
+        const img = new window.Image();
+        img.onload = () => {
+          setQrImages(prev => ({ ...prev, [id]: img }));
+        };
+        img.src = url as string;
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrDataUrls]);
+
+  // ลบ qrDataUrls/qrImages เมื่อขนาด canvas เปลี่ยน
+  useEffect(() => {
+    setQrDataUrls({});
+    setQrImages({});
+  }, [canvasSize.width, canvasSize.height]);
+
+  // useEffect สำหรับ barcode
+  useEffect(() => {
+    elements.forEach(el => {
+      if (el.type === 'barcode' && el.value && !barcodeDataUrls[el.id]) {
+        updateBarcodeDataUrl(el);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements]);
+
+  useEffect(() => {
+    Object.entries(barcodeDataUrls).forEach(([id, url]) => {
+      if (!barcodeImages[id] && url) {
+        const img = new window.Image();
+        img.onload = () => {
+          setBarcodeImages(prev => ({ ...prev, [id]: img }));
+        };
+        img.src = url as string;
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [barcodeDataUrls]);
 
   // Add element
   const handleAddElement = (type: string) => {
@@ -930,7 +1041,7 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
   // Export PNG
   const handleExportPNG = async () => {
     if (!stageRef.current) return;
-    const uri = stageRef.current.toDataURL({ pixelRatio: 2 });
+    const uri = stageRef.current.toDataURL({ pixelRatio: 4 }); // เพิ่มความละเอียดเป็น 4 เท่า
     const link = document.createElement('a');
     link.download = 'label.png';
     link.href = uri;
@@ -1064,86 +1175,6 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       }));
     }
   };
-
-  // ฟังก์ชันสร้าง dataURL สำหรับ QR
-  async function updateQrDataUrl(el: ElementType) {
-    if (el.type === 'qr' && el.value) {
-      const url = await QRCode.toDataURL(el.value, { width: el.width, margin: 0 });
-      setQrDataUrls(prev => ({ ...prev, [el.id]: url }));
-    }
-  }
-
-  // ฟังก์ชันสร้าง dataURL สำหรับ Barcode (ใช้ jsbarcode)
-  async function updateBarcodeDataUrl(el: ElementType) {
-    if (el.type === 'barcode' && el.value) {
-      const canvas = document.createElement('canvas');
-      try {
-        JsBarcode(canvas, el.value, {
-          format: el.format || 'CODE128',
-          width: 2,
-          height: el.height,
-          displayValue: false,
-          margin: 0,
-        });
-        const url = canvas.toDataURL('image/png');
-        setBarcodeDataUrls(prev => ({ ...prev, [el.id]: url }));
-      } catch (err) {
-        // handle error
-      }
-    }
-  }
-
-  useEffect(() => {
-    elements.forEach(el => {
-      if (el.type === 'qr' && el.value && !qrDataUrls[el.id]) {
-        updateQrDataUrl(el);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements]);
-
-  // โหลด image object จาก dataURL
-  useEffect(() => {
-    Object.entries(qrDataUrls).forEach(([id, url]) => {
-      if (!qrImages[id] && url) {
-        const img = new window.Image();
-        img.onload = () => {
-          setQrImages(prev => ({ ...prev, [id]: img }));
-        };
-        img.src = url;
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qrDataUrls]);
-
-  // ลบ qrDataUrls/qrImages เมื่อขนาด canvas เปลี่ยน
-  useEffect(() => {
-    setQrDataUrls({});
-    setQrImages({});
-  }, [canvasSize.width, canvasSize.height]);
-
-  // useEffect สำหรับ barcode
-  useEffect(() => {
-    elements.forEach(el => {
-      if (el.type === 'barcode' && el.value && !barcodeDataUrls[el.id]) {
-        updateBarcodeDataUrl(el);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements]);
-
-  useEffect(() => {
-    Object.entries(barcodeDataUrls).forEach(([id, url]) => {
-      if (!barcodeImages[id] && url) {
-        const img = new window.Image();
-        img.onload = () => {
-          setBarcodeImages(prev => ({ ...prev, [id]: img }));
-        };
-        img.src = url;
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [barcodeDataUrls]);
 
   // เพิ่มฟังก์ชันสำหรับ snapping
   const snapToNearest = (pos: { x: number, y: number }, elements: ElementType[]) => {
@@ -1517,330 +1548,237 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
 
   // Add save template function
   const handleSaveTemplate = async () => {
-    if (!templateInfo.name) {
-      message.error('กรุณาใส่ชื่อเทมเพลต');
-      setIsSettingsVisible(true);
-      return;
-    }
-    
-    setIsSaving(true);
-    
     try {
-      // ฟังก์ชันช่วยจำกัดความยาวของสตริง
-      const truncateString = (str: string | undefined | null, maxLength: number) => {
-        if (!str) return null;
-        return str.substring(0, maxLength);
-      };
+      // Check if template name is specified
+      if (!templateInfo.name || templateInfo.name.trim() === '') {
+        message.error('Please specify template name');
+        return;
+      }
       
-      // ฟังก์ชันลดขนาดของ data URL สำหรับรูปภาพ
-      const compressImageDataUrl = async (dataUrl: string, maxSize: number = 20000): Promise<string> => {
-        if (!dataUrl || dataUrl.length <= maxSize || !dataUrl.startsWith('data:image')) {
-          return dataUrl;
-        }
-        
-        // ถ้าเราอยู่ในเบราว์เซอร์ จะใช้ Canvas API เพื่อลดขนาดรูปภาพ
-        if (typeof window !== 'undefined') {
-          return new Promise((resolve) => {
-            const img = new Image();
-            img.onload = () => {
-              const canvas = document.createElement('canvas');
-              
-              // ลดขนาดตามอัตราส่วน 
-              let { width, height } = img;
-              let scale = 1;
-              
-              // ถ้าข้อมูลมีขนาดใหญ่มาก ลดขนาดรูปภาพลง
-              if (dataUrl.length > 100000) {
-                scale = 0.3; // ลดขนาดลง 70%
-              } else if (dataUrl.length > 50000) {
-                scale = 0.5; // ลดขนาดลง 50%
-              } else if (dataUrl.length > 30000) {
-                scale = 0.7; // ลดขนาดลง 30%
-              }
-              
-              width = Math.floor(width * scale);
-              height = Math.floor(height * scale);
-              
-              canvas.width = width;
-              canvas.height = height;
-              
-              const ctx = canvas.getContext('2d');
-              if (!ctx) {
-                resolve(dataUrl); // ถ้าไม่สามารถสร้าง context ได้ ส่งคืนค่าเดิม
-                return;
-              }
-              
-              // วาดรูปภาพลงบน canvas ด้วยขนาดที่ลดลง
-              ctx.drawImage(img, 0, 0, width, height);
-              
-              // ปรับคุณภาพ JPEG ให้ต่ำลงเพื่อลดขนาดไฟล์ (0.5 = 50% quality)
-              const quality = 0.6;
-              // แปลง canvas กลับเป็น data URL ด้วยคุณภาพที่ลดลง
-              const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
-              
-              console.log(`ลดขนาดรูปภาพจาก ${dataUrl.length} เป็น ${compressedDataUrl.length} ไบต์`);
-              resolve(compressedDataUrl);
-            };
-            
-            img.onerror = () => {
-              // ถ้าไม่สามารถโหลดรูปภาพได้ ส่งคืนค่า placeholder แทน
-              resolve("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAAA1BMVEUAAACnej3aAAAAAXRSTlMAQObYZgAAAApJREFUCNdjwAsAAB4AAdpxxYoAAAAASUVORK5CYII=");
-            };
-            
-            img.src = dataUrl;
-          });
-        }
-        
-        // ถ้าไม่สามารถลดขนาดได้ ส่งคืนรูปภาพ placeholder
-        return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAAA1BMVEUAAACnej3aAAAAAXRSTlMAQObYZgAAAApJREFUCNdjwAsAAB4AAdpxxYoAAAAASUVORK5CYII=";
-      };
+      // Check if canvas exists
+      if (!canvas) {
+        message.error('Canvas element not found');
+        return;
+      }
       
-      // ปรับปรุง elements โดยลดขนาดรูปภาพ (ทำให้เป็น async function)
-      const optimizeElements = async (elements: ElementType[]): Promise<ElementType[]> => {
-        // Normalize สีให้เป็นรูปแบบที่กระชับ
-        const normalizedElements = normalizeElementColors(elements);
-        
-        // สร้าง array ของ Promise สำหรับแต่ละ element
-        const optimizationPromises = normalizedElements.map(async (el) => {
-          // ถ้าเป็น image element ให้ลดขนาดรูปภาพ
-          if (el.type === 'image' && 'src' in el) {
-            const imageEl = el as ImageElement;
-            // ลดขนาด data URL
-            const compressedSrc = await compressImageDataUrl(imageEl.src);
-            return { ...imageEl, src: compressedSrc };
+      // Get elements from canvas
+      const canvasElements = elements;
+      
+      if (!canvasElements || canvasElements.length === 0) {
+        message.warning('Template has no elements');
+        return;
+      }
+
+      // Compress image Data URLs (if any)
+      const elementsWithCompressedImages = await Promise.all(
+        canvasElements.map(async (el) => {
+          if (el.type === 'image' && (el as ImageElement).src && (el as ImageElement).src.startsWith('data:')) {
+            const compressedSrc = await compressImageDataUrl((el as ImageElement).src, 0.7);
+            return { ...el, src: compressedSrc };
           }
           return el;
-        });
-        
-        // รอให้ทุก promise เสร็จสิ้น
-        return Promise.all(optimizationPromises);
-      };
-      
-      // ดำเนินการลดขนาดข้อมูล elements
-      const optimizedElements = await optimizeElements(elements);
-      
-      // เตรียมข้อมูลเทมเพลต - เก็บเฉพาะข้อมูลที่จำเป็น
-      const safeElements = optimizedElements.map(el => {
-        // ลบ imageObj เพราะไม่จำเป็นต้องส่งไป backend และอาจมีขนาดใหญ่
-        if (el.type === 'image' && 'imageObj' in el) {
-          const { imageObj, ...rest } = el as ImageElement;
-          return rest;
-        }
-        return el;
-      });
-      
-      const contentData = {
-        elements: safeElements,
+        })
+      );
+
+      // Create content as JSON string for database
+      const content = {
         canvasSize,
+        elements: elementsWithCompressedImages
       };
       
-      // แปลง elements เป็น components สำหรับ backend และทำให้ข้อมูลมีขนาดเล็กที่สุด
-      const components = elements.map(el => {
-        // แปลง type ให้ตรงกับที่ backend ต้องการ
-        // ต้องเป็นค่าที่ตรงกับที่ฐานข้อมูลกำหนดไว้ใน CHECK constraint
+      // Convert to JSON string
+      const finalContent = JSON.stringify(content);
+      
+      // Check JSON length (should not exceed 200,000 characters to avoid NVARCHAR(MAX) limitations)
+      if (finalContent.length > 200000) {
+        message.warning('Template size is too large. Please reduce size or number of images.');
+        console.warn(`Template content size: ${finalContent.length} characters`);
+        // Consider additional compression or separate image handling
+        // Continue anyway as it might still work, but warn the user
+      }
+
+      // Create template data - WITHOUT components
+      const templateData: any = {
+        name: truncateString(templateInfo.name, 100) || 'Untitled Template', 
+        description: truncateString(templateInfo.description, 255),
+        productKey: truncateString(templateInfo.productKey, 50),
+        customerKey: truncateString(templateInfo.customerKey, 50),
+        
+        // เพิ่มฟิลด์ใหม่ตามโครงสร้างฐานข้อมูล
+        engine: templateInfo.engine || 'html',
+        paperSize: (templateInfo.paperSize || '4x4').toUpperCase(),
+        orientation: templateInfo.orientation || 'Portrait',
+        templateType: templateInfo.templateType || 'INNER',
+        
+        active: true,
+        content: finalContent
+      };
+
+      // Version++ logic when editing existing template
+      if (templateId) {
+        templateData.templateID = templateId;
+        templateData.incrementVersion = true; // สำคัญ: ส่งค่านี้เพื่อให้ backend เพิ่ม Version
+      } else {
+        // Only set version when creating new template
+        templateData.version = 1;
+      }
+      
+      // Show loading message
+      message.loading({ content: 'Saving Template...', key: 'saveTemplate', duration: 0 });
+      
+      // STEP 1: Save template first to get templateID
+      const response = await fetch('/api/templates', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+        },
+        body: JSON.stringify(templateData),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to save template: ${response.status} ${errorText}`);
+      }
+
+      const savedTemplateData = await response.json();
+      
+      // Get the templateID from response
+      const savedTemplateId = savedTemplateData.templateID || savedTemplateData.id || templateId;
+      
+      if (!savedTemplateId) {
+        throw new Error('No template ID returned from server');
+      }
+      
+      console.log('Template saved with ID:', savedTemplateId);
+      
+      // STEP 2: Now save components with the templateID
+      // Prepare components for saving
+      const components = elementsWithCompressedImages.map(el => {
+        // Create base component properties
         let componentType;
         switch (el.type) {
-          case 'text': componentType = 'TEXT'; break;
-          case 'barcode': componentType = 'BARCODE'; break;
-          case 'qr': componentType = 'QR'; break;
-          case 'rect': componentType = 'RECTANGLE'; break;
-          case 'ellipse': componentType = 'ELLIPSE'; break;
-          case 'line': componentType = 'LINE'; break;
-          case 'arrow': componentType = 'ARROW'; break;
-          case 'image': componentType = 'IMAGE'; break;
-          case 'variable': componentType = 'VARIABLE'; break;
-          default: componentType = 'TEXT';
+          case 'text': componentType = 'text'; break;
+          case 'barcode': componentType = 'barcode'; break;
+          case 'qr': componentType = 'qr'; break;
+          case 'rect': componentType = 'rectangle'; break;
+          case 'ellipse': componentType = 'ellipse'; break;
+          case 'line': componentType = 'line'; break;
+          case 'arrow': componentType = 'arrow'; break;
+          case 'image': componentType = 'image'; break;
+          case 'variable': componentType = 'variable'; break;
+          default: componentType = 'text';
         }
 
-        // สร้าง base component ที่มีเฉพาะค่าที่จำเป็น
-        // ตัดข้อมูลที่ไม่จำเป็นออกให้มากที่สุด
+        const compTypeUpper = componentType.toUpperCase();
         const baseComponent: any = {
-          componentType,
-          ComponentType: componentType, // ส่งทั้งตัวพิมพ์ใหญ่และตัวพิมพ์เล็ก
+          templateID: savedTemplateId,
+          componentType,  // รักษาตัวพิมพ์เล็กไว้สำหรับความเข้ากันได้กับระบบเก่า
+          ComponentType: compTypeUpper,   // ส่งเป็นตัวพิมพ์ใหญ่ให้ระบบใหม่
           x: Math.round(el.x),
-          X: Math.round(el.x),
           y: Math.round(el.y),
-          Y: Math.round(el.y),
           w: el.width != null ? Math.round(el.width) : 0,
-          W: el.width != null ? Math.round(el.width) : 0,
-          h: el.height != null ? Math.round(el.height) : 0,
-          H: el.height != null ? Math.round(el.height) : 0
+          h: el.height != null ? Math.round(el.height) : 0
         };
 
-        // เพิ่ม properties ตามประเภทของ component
+        // Add specific properties for each component type
         if (el.type === 'text') {
           const textEl = el as TextElement;
           baseComponent.fontName = truncateString(textEl.fontFamily, 50) || null;
-          baseComponent.FontName = truncateString(textEl.fontFamily, 50) || null;
           baseComponent.fontSize = textEl.fontSize != null ? Math.round(textEl.fontSize) : null;
-          baseComponent.FontSize = textEl.fontSize != null ? Math.round(textEl.fontSize) : null;
           baseComponent.staticText = truncateString(textEl.text, 255) || null;
-          baseComponent.StaticText = truncateString(textEl.text, 255) || null;
+          baseComponent.fill = textEl.fill || '#000000';
+          baseComponent.align = textEl.align || 'left';
+          baseComponent.fontStyle = textEl.fontStyle || 'normal';
+          baseComponent.fontWeight = textEl.fontWeight || 'normal';
         } else if (el.type === 'barcode') {
           const barcodeEl = el as BarcodeElement;
           baseComponent.placeholder = truncateString(barcodeEl.value, 100) || null;
-          baseComponent.Placeholder = truncateString(barcodeEl.value, 100) || null;
           baseComponent.barcodeFormat = truncateString(barcodeEl.format, 20) || null;
-          baseComponent.BarcodeFormat = truncateString(barcodeEl.format, 20) || null;
+          baseComponent.fill = barcodeEl.fill || '#000000';
         } else if (el.type === 'qr') {
           const qrEl = el as QrElement;
           baseComponent.placeholder = truncateString(qrEl.value, 100) || null;
-          baseComponent.Placeholder = truncateString(qrEl.value, 100) || null;
+          baseComponent.fill = qrEl.fill || '#000000';
+        } else if (el.type === 'rect' || el.type === 'ellipse' || el.type === 'line') {
+          baseComponent.fill = (el as any).fill || '#000000';
+          if (el.borderWidth) {
+            baseComponent.borderWidth = el.borderWidth;
+            baseComponent.borderColor = el.borderColor || '#000000';
+            baseComponent.borderStyle = el.borderStyle || 'solid';
+          }
         } else if (el.type === 'image') {
           const imageEl = el as ImageElement;
           baseComponent.placeholder = "image_placeholder";
-          baseComponent.Placeholder = "image_placeholder";
+          // Upload image as separate file or store as Base64 in component
+          if ((imageEl as any).src) {
+            baseComponent.imageData = (imageEl as any).src;
+          }
         } else if (el.type === 'variable') {
           const varEl = el as VariableElement;
           baseComponent.placeholder = truncateString(varEl.name, 100) || null;
-          baseComponent.Placeholder = truncateString(varEl.name, 100) || null;
+          baseComponent.fill = varEl.fill || '#000000';
+          baseComponent.fontName = 'Arial';
+          baseComponent.fontSize = 12;
         }
 
+        // Add common properties if they exist
+        if (el.rotation) baseComponent.rotation = el.rotation;
+        if (el.visible !== undefined) baseComponent.visible = el.visible;
+        if (el.layer !== undefined) baseComponent.layer = el.layer;
+        
         return baseComponent;
       });
-
-      // แปลง content เป็น JSON string
-      const contentJsonString = JSON.stringify(contentData);
-      console.log(`ขนาดของ JSON content: ${contentJsonString.length} ตัวอักษร`);
       
-      // เพิ่มขนาดลิมิตเป็น 100,000 ตัวอักษร (เดิมใช้ 50,000)
-      const MAX_CONTENT_LENGTH = 100000;
-      
-      // ถ้าขนาดใหญ่เกินไป ให้บีบอัดเพิ่มเติม
-      let finalContent = contentJsonString;
-      if (contentJsonString.length > MAX_CONTENT_LENGTH) {
-        console.warn(`ขนาด JSON เกินลิมิต (${contentJsonString.length} > ${MAX_CONTENT_LENGTH}), กำลังบีบอัดเพิ่มเติม...`);
-        
-        // ดำเนินการบีบอัดโดยการลบ properties ที่ไม่สำคัญออก
-        const compressedData = {
-          elements: safeElements.map(el => {
-            // ลบ properties ที่ไม่จำเป็นออก
-            const { id, draggable, locked, layer, visible, rotation, ...essentials } = el as any;
-            
-            // ถ้าเป็น text element ให้ลบ properties ของ style ที่ไม่จำเป็นด้วย
-            if (el.type === 'text') {
-              const { fontStyle, fontWeight, align, ...textEssentials } = essentials;
-              if (fontStyle === 'normal') delete textEssentials.fontStyle;
-              if (fontWeight === 'normal') delete textEssentials.fontWeight;
-              if (align === 'left') delete textEssentials.align;
-              return { id, type: el.type, ...textEssentials };
-            }
-            
-            return { id, type: el.type, ...essentials };
-          }),
-          canvasSize,
-        };
-        
-        finalContent = JSON.stringify(compressedData);
-        console.log(`หลังบีบอัด: ${finalContent.length} ตัวอักษร`);
-        
-        // ถ้ายังใหญ่เกินไป ตัดให้พอดีกับลิมิตแล้วให้ warning
-        if (finalContent.length > MAX_CONTENT_LENGTH) {
-          console.warn(`ขนาด JSON ยังเกินลิมิตหลังบีบอัด จะตัดให้เหลือ ${MAX_CONTENT_LENGTH} ตัวอักษร`);
-          finalContent = finalContent.substring(0, MAX_CONTENT_LENGTH - 1) + '}';
-        }
-      }
-
-      // สร้าง template data และกำหนด type เป็น any เพื่อให้สามารถเพิ่ม property ได้
-      const templateData: any = {
-        name: truncateString(templateInfo.name, 100) || 'Untitled Template', // NVARCHAR(100) NOT NULL
-        Name: truncateString(templateInfo.name, 100) || 'Untitled Template', // ใช้ทั้งตัวพิมพ์ใหญ่
-        description: truncateString(templateInfo.description, 255), // NVARCHAR(255)
-        Description: truncateString(templateInfo.description, 255), // ใช้ทั้งตัวพิมพ์ใหญ่
-        productKey: truncateString(templateInfo.productKey, 50), // VARCHAR(50)
-        ProductKey: truncateString(templateInfo.productKey, 50), // ใช้ทั้งตัวพิมพ์ใหญ่
-        customerKey: truncateString(templateInfo.customerKey, 50), // VARCHAR(50)
-        CustomerKey: truncateString(templateInfo.customerKey, 50), // ใช้ทั้งตัวพิมพ์ใหญ่
-        orientation: canvasSize.width > canvasSize.height ? 'Landscape' : 'Portrait',
-        Orientation: canvasSize.width > canvasSize.height ? 'Landscape' : 'Portrait', // ใช้ทั้งตัวพิมพ์ใหญ่
-        paperSize: 'A6',
-        PaperSize: 'A6', // ใช้ทั้งตัวพิมพ์ใหญ่
-        engine: 'html',
-        Engine: 'html', // ใช้ทั้งตัวพิมพ์ใหญ่
-        active: true,
-        Active: true, // ใช้ทั้งตัวพิมพ์ใหญ่
-        // ใช้ทั้ง Content และ content เพื่อให้แน่ใจว่าจะตรงกับที่ backend คาดหวัง
-        Content: finalContent, // ตัวพิมพ์ใหญ่
-        content: finalContent, // ตัวพิมพ์เล็ก
-        components,
-        Components: components // ใช้ทั้งตัวพิมพ์ใหญ่
-      };
-
-      if (templateId) {
-        templateData.id = templateId;
-        templateData.ID = templateId; // ใช้ทั้งตัวพิมพ์ใหญ่
-        templateData.templateID = templateId; // ชื่อฟิลด์ที่ถูกต้องตามแบบฟอร์ม
-        templateData.TemplateID = templateId; // ใช้ทั้งตัวพิมพ์ใหญ่
-        templateData.incrementVersion = true; // สำคัญ: ต้องส่งค่านี้เป็น true เสมอเมื่อเป็นการแก้ไข
-        templateData.IncrementVersion = true; // ใช้ทั้งตัวพิมพ์ใหญ่
-        // ไม่กำหนดค่า version เมื่อเป็นการแก้ไข ให้ backend เป็นผู้เพิ่ม version
-      } else {
-        // กำหนดค่า version เฉพาะเมื่อเป็นการสร้างใหม่เท่านั้น
-        templateData.version = 1;
-        templateData.Version = 1;
-      }
-      
-      console.log("กำลังบันทึกเทมเพลต:", templateData);
-      
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error('กรุณาเข้าสู่ระบบก่อน');
-      }
-      
-      // สร้าง/อัพเดตเทมเพลต
-      let endpoint = 'http://localhost:5051/api/templates';
-      let method = 'POST';
-      
-      // ถ้ามี templateId ให้ใช้ POST แทน PUT เพื่อหลีกเลี่ยงปัญหา endpoint PUT ที่มีข้อผิดพลาด
-      if (templateId) {
-        // แทนที่จะใช้ endpoint = `http://localhost:5051/api/templates/${templateId}`; method = 'PUT';
-        // เปลี่ยนเป็นการส่งข้อมูลด้วย POST แต่คงค่า id/templateID เพื่อให้ backend รู้ว่าเป็นการแก้ไข
-        templateData.isUpdate = true; // เพิ่มฟิลด์เพื่อบ่งบอกว่านี่คือการอัพเดต
-        templateData.IsUpdate = true; // ใช้ทั้งตัวพิมพ์ใหญ่และเล็ก
-      }
-      
-      const res = await fetch(endpoint, {
-        method,
+      // Save components to API
+      const componentsResponse = await fetch(`/api/templates/${savedTemplateId}/components`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(templateData)
+        body: JSON.stringify(components),
       });
       
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => null);
-        throw new Error(
-          errorData?.message || 
-          `HTTP error! status: ${res.status}`
-        );
+      if (!componentsResponse.ok) {
+        const errorText = await componentsResponse.text();
+        throw new Error(`Failed to save components: ${componentsResponse.status} ${errorText}`);
       }
       
-      const savedTemplate = await res.json();
-      console.log("บันทึกเทมเพลตสำเร็จ:", savedTemplate);
+      // Show success message
+      message.success({ content: 'Template saved successfully', key: 'saveTemplate' });
       
-      message.success(`บันทึกเทมเพลต ${templateInfo.name} สำเร็จ`);
+      // Close modal
+      setTemplateInfoModal(false);
       
-      // เปลี่ยนเส้นทางไปยังหน้า template management
-      router.push('/templates/management');
-    } catch (err: any) {
-      console.error('Error saving template:', err);
-      message.error(`ไม่สามารถบันทึกเทมเพลตได้: ${err.message}`);
-    } finally {
-      setIsSaving(false);
+      // Update state to show saved
+      setIsSaving(true);
+      
+      // If creating a new Template, update templateId with value from server
+      if (!templateId && savedTemplateId) {
+        setTemplateId(savedTemplateId);
+        // Update URL with new ID (if desired)
+        window.history.replaceState(null, '', `/template-designer/${savedTemplateId}`);
+      }
+
+      return savedTemplateData;
+    } catch (error: unknown) {
+      console.error('Error saving template:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      message.error({ content: `Failed to save template: ${errorMessage}`, key: 'saveTemplate' });
+      return null;
     }
   };
 
   // Update save button click handler
   const handleSaveClick = () => {
-    // หา Product Name จาก elements
+    // Find Product Name from elements
     const productNameElement = elements.find(el => 
       el.type === 'text' && 
       el.fontWeight === 'bold' && 
       el.fontSize >= LABEL_CONFIG.headerFontSize
     ) as TextElement | undefined;
 
-    // หา Product Code และ Customer Code จาก text element
+    // Find Product Code and Customer Code from text elements
     let productKey = '';
     let customerKey = '';
     const productCodeIdx = elements.findIndex(el => el.type === 'text' && el.text.trim().toLowerCase() === 'product code:');
@@ -1852,7 +1790,7 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       customerKey = (elements[customerCodeIdx + 1] as TextElement).text;
     }
 
-    // แก้ไข productName: ตัดอักขระพิเศษและช่องว่างออก
+    // Clean productName: remove special characters and spaces
     let cleanProductName = productNameElement?.text || '';
     cleanProductName = cleanProductName.replace(/[^a-zA-Z0-9ก-๙]/g, '');
 
@@ -1860,18 +1798,36 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       name: cleanProductName,
       description: '',
       productKey: productKey,
-      customerKey: customerKey
+      customerKey: customerKey,
+      paperSize: templateInfo.paperSize,
+      orientation: templateInfo.orientation,
+      templateType: templateInfo.templateType
     });
 
     setTemplateInfoModal(true);
   };
 
-  // เพิ่มฟังก์ชัน buildElementsFromBatch
+  // Add function to generate QR code
+  const generateQRCode = useCallback((data: any) => {
+    // Create data for QR code from important fields
+    const qrData = {
+      batchNo: data.BatchNo || data.batchNo || data.LOT_CODE || '',
+      product: data.ProductName || data.productName || data.PRODUCT || '',
+      customer: data.CustomerName || data.customerName || '',
+      date: data.ProductionDate || data.CREATED_DATE || new Date().toISOString(),
+      expiryDate: data.FinalExpiryDate || data.BEST_BEFORE || ''
+    };
+    
+    // Convert to JSON string
+    return JSON.stringify(qrData);
+  }, []);
+
+  // Function for batch generation template
   const buildElementsFromBatch = useCallback((data: any): ElementType[] => {
     const els: ElementType[] = [];
     const { width: cw, height: ch } = canvasSize;
     
-    // คำนวณอัตราส่วนสเกลเมื่อเทียบกับ canvas มาตรฐาน 900x500
+    // Calculate scale ratio compared to standard canvas 900x500
     const scaleX = cw / 900;
     const scaleY = ch / 500;
     
@@ -1881,7 +1837,7 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
     const valueWidth = contentWidth * LABEL_CONFIG.valueWidth;
     let y = margin;
 
-    // คำนวณขนาดอักษรโดยปรับตามขนาด canvas
+    // Calculate font sizes adjusting to canvas size
     const scaleFontSize = (size: number) => Math.max(8, Math.round(size * Math.min(scaleX, scaleY)));
     const headerFontSize = scaleFontSize(LABEL_CONFIG.headerFontSize);
     const normalFontSize = scaleFontSize(LABEL_CONFIG.normalFontSize);
@@ -1892,134 +1848,16 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
     els.push({
       id: uuidv4(), type: 'text',
       x: margin, y,
-      width: getTextWidth(data.productName || '', headerFontSize, 'Arial'),
+      width: getTextWidth(data.productName || data.ProductName || data.PRODUCT || '', headerFontSize, 'Arial'),
       height: lineHeight * 1.2,
-      text: data.productName || '–',
+      text: data.productName || data.ProductName || data.PRODUCT || '–',
       fontSize: headerFontSize,
       fontFamily: 'Arial', fill: '#000', align: 'left',
       fontWeight: 'bold', draggable: true, visible: true, layer: 0
     } as TextElement);
     y += lineHeight * 1.5;
 
-    // main fields
-    FIELD_CONFIG.forEach(field => {
-      const rawVal = (() => {
-        if (field.key === 'finalExpiryDate') {
-          return data.finalExpiryDate ?? data.dateExpiry ?? (
-            data.productionDate
-              ? (() => {
-                  const pd = new Date(data.productionDate);
-                  pd.setDate(pd.getDate() + 365);
-                  return pd;
-                })()
-              : undefined
-          );
-        }
-        return data[field.key];
-      })();
-      // label — คำนวณความกว้างตามข้อความจริง
-      const labelText = field.label + ':';
-      const textWLabel = getTextWidth(labelText, normalFontSize, 'Arial');
-      els.push({
-        id: uuidv4(), type: 'text',
-        x: margin, y,
-        width: Math.min(labelWidth, textWLabel),
-        height: lineHeight,
-        text: labelText,
-        fontSize: normalFontSize,
-        fontFamily: 'Arial', fill: '#000', align: 'left',
-        draggable: true, visible: true, layer: 0
-      } as TextElement);
-      // value — คำนวณความกว้างตามข้อความจริง
-      const display = getDisplayValue(rawVal, field.format);
-      const textW = getTextWidth(display, normalFontSize, 'Arial');
-      els.push({
-        id: uuidv4(), type: 'text',
-        x: margin + Math.min(labelWidth, textWLabel) + spacing, y,
-        width: Math.min(valueWidth, textW),
-        height: lineHeight,
-        text: display,
-        fontSize: normalFontSize,
-        fontFamily: 'Arial', fill: '#000', align: 'left',
-        draggable: true, visible: true, layer: 0
-      } as TextElement);
-      y += lineHeight + spacing;
-    });
-
-    // shipping address
-    els.push({
-      id: uuidv4(), type: 'text',
-      x: margin, y,
-      width: contentWidth, height: lineHeight,
-      text: 'Shipping Address:',
-      fontSize: normalFontSize * 1.1,
-      fontFamily: 'Arial', fill: '#000', align: 'left',
-      draggable: true, visible: true, layer: 0
-    } as TextElement);
-    y += lineHeight + spacing;
-
-    // ตรวจสอบว่าพื้นที่ที่เหลือเพียงพอสำหรับ address fields หรือไม่
-    const remainingHeight = ch - y - margin;
-    const estimatedAddressHeight = ADDRESS_FIELDS.length * (lineHeight + spacing * 0.5);
-    
-    // ถ้าไม่พอ ให้ปรับขนาดและระยะห่างลง
-    let addressLineHeight = lineHeight;
-    let addressSpacing = spacing * 0.5;
-    
-    if (estimatedAddressHeight > remainingHeight && ADDRESS_FIELDS.length > 0) {
-      const reductionFactor = remainingHeight / estimatedAddressHeight;
-      addressLineHeight = Math.max(8, Math.floor(lineHeight * reductionFactor));
-      addressSpacing = Math.max(2, Math.floor(spacing * 0.5 * reductionFactor));
-    }
-
-    ADDRESS_FIELDS.forEach(key => {
-      const labelText = key.replace('_', ' ').toUpperCase() + ':';
-      const valueText = data[key] ?? '–';
-      const labelWidth = getTextWidth(labelText, normalFontSize, 'Arial');
-      const valueWidth = getTextWidth(String(valueText), normalFontSize, 'Arial');
-      els.push({
-        id: uuidv4(), type: 'text',
-        x: margin + spacing, y,
-        width: labelWidth,
-        height: addressLineHeight,
-        text: labelText,
-        fontSize: normalFontSize,
-        fontFamily: 'Arial', fill: '#000', align: 'left',
-        draggable: true, visible: true, layer: 0
-      } as TextElement);
-      els.push({
-        id: uuidv4(), type: 'text',
-        x: margin + spacing + labelWidth + spacing, y,
-        width: valueWidth,
-        height: addressLineHeight,
-        text: String(valueText),
-        fontSize: normalFontSize,
-        fontFamily: 'Arial', fill: '#000', align: 'left',
-        draggable: true, visible: true, layer: 0
-      } as TextElement);
-      y += addressLineHeight + addressSpacing;
-    });
-
-    // barcode (ถ้ามี)
-    const upc = data.UPCCODE ?? data.upccode;
-    if (upc) {
-      y += lineHeight;
-      // ตรวจสอบว่ามีพื้นที่เพียงพอหรือไม่
-      const barcodeHeight = Math.min(Math.max(40, lineHeight * 2), ch - y - margin);
-      if (y + barcodeHeight + margin <= ch) {
-        els.push({
-          id: uuidv4(), type: 'barcode',
-          x: margin, y,
-          width: Math.min(contentWidth * 0.4, 300 * scaleX),
-          height: barcodeHeight,
-          value: String(upc),
-          format: 'CODE128', fill: '#000',
-          draggable: true, visible: true, layer: 0
-        } as BarcodeElement);
-      }
-    }
-
-    // ตรวจสอบว่ามี element ที่อยู่นอก canvas หรือไม่ และปรับตำแหน่งเข้ามา
+    // Check if any elements are outside the canvas and adjust their position
     els.forEach(el => {
       if (el.x + el.width > cw) {
         el.width = Math.max(20, cw - el.x);
@@ -2029,13 +1867,45 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       }
     });
 
-    return els;
-  }, [canvasSize]);
+    // barcode (batch number)
+    const batchNumber = data.BatchNo || data.batchNo || data.LOT_CODE || '';
+    if (batchNumber) {
+      y += lineHeight;
+      // Check if there's enough space
+      const barcodeHeight = Math.min(Math.max(40, lineHeight * 2), ch - y - margin);
+      if (y + barcodeHeight + margin <= ch) {
+        els.push({
+          id: uuidv4(), type: 'barcode',
+          x: margin, y,
+          width: Math.min(contentWidth * 0.4, 300 * scaleX),
+          height: barcodeHeight,
+          value: String(batchNumber),
+          format: 'CODE128', fill: '#000',
+          draggable: true, visible: true, layer: 0
+        } as BarcodeElement);
+        
+        // Add QR code on the right
+        const qrSize = Math.min(contentWidth * 0.3, 150 * scaleX);
+        els.push({
+          id: uuidv4(), type: 'qr',
+          x: margin + Math.min(contentWidth * 0.4, 300 * scaleX) + spacing * 2,
+          y,
+          width: qrSize,
+          height: qrSize,
+          value: generateQRCode(data),
+          fill: '#000',
+          draggable: true, visible: true, layer: 0
+        } as QrElement);
+      }
+    }
 
-  // ปรับปรุงฟังก์ชัน fetchAndApplyBatch
+    return els;
+  }, [canvasSize, generateQRCode]);
+
+  // Function to fetch and apply batch data
   const fetchAndApplyBatch = async () => {
     if (!batchNo) {
-      message.error('กรุณาระบุเลข Batch');
+      message.error('Please enter a Batch Number');
       return;
     }
 
@@ -2043,10 +1913,10 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       setLoading(true);
       const token = localStorage.getItem('token');
       if (!token) {
-        throw new Error('กรุณาเข้าสู่ระบบก่อน');
+        throw new Error('Please login first');
       }
 
-      // ทำความสะอาด batchNo โดยตัด :1 ออก
+      // Clean batchNo by removing ':1' if present
       const cleanBatchNo = batchNo.split(':')[0];
       console.log('>> clean batch no:', cleanBatchNo);
 
@@ -2057,22 +1927,87 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
       });
 
       if (!response.ok) {
-        throw new Error('ไม่พบข้อมูล Batch');
+        throw new Error('Batch data not found');
       }
 
       const payload = await response.json();
-      // ถ้าเป็น array ให้ใช้ตัวแรก
+      // If it's an array, use the first item
       const data = Array.isArray(payload) ? payload[0] : payload;
       console.log('>> batch record =', data);
-      // สร้าง elements ใหม่จาก batch data
+      
+      // Create new elements from batch data
       const newElements = buildElementsFromBatch(data);
-      console.log('>> generated elements:', newElements);
+      
+      // Add additional QR Code with batch data
+      const { width: cw, height: ch } = canvasSize;
+      const scaleX = cw / 900;
+      const scaleY = ch / 500;
+      const margin = Math.min(cw, ch) * 0.05;
+      const contentWidth = cw - margin * 2;
+      const spacing = Math.max(4, 10 * Math.min(scaleX, scaleY));
+      const qrSize = Math.min(contentWidth * 0.3, 150 * scaleX);
+      
+      // Find appropriate position - use empty space in the bottom right
+      const maxY = Math.max(...newElements.map(el => el.y + (el.height || 0)));
+      const y = maxY + spacing;
+      
+      if (y + qrSize + margin <= ch) {
+        // Create QR code data
+        const qrData = {
+          batchNo: data.BatchNo || data.batchNo || data.LOT_CODE || '',
+          product: data.ProductName || data.productName || data.PRODUCT || '',
+          customer: data.CustomerName || data.customerName || '',
+          date: data.ProductionDate || data.CREATED_DATE || new Date().toISOString(),
+          expiryDate: data.FinalExpiryDate || data.BEST_BEFORE || ''
+        };
+        
+        // Add QR code to elements list
+        newElements.push({
+          id: uuidv4(), 
+          type: 'qr',
+          x: cw - margin - qrSize,
+          y,
+          width: qrSize,
+          height: qrSize,
+          value: JSON.stringify(qrData),
+          fill: '#000',
+          draggable: true, 
+          visible: true, 
+          layer: 0
+        } as QrElement);
+        
+        // Add barcode if not already present
+        const batchNumber = data.BatchNo || data.batchNo || data.LOT_CODE || '';
+        const hasBatchBarcode = newElements.some(el => 
+          el.type === 'barcode' && 'value' in el && el.value.includes(batchNumber)
+        );
+        
+        if (!hasBatchBarcode && batchNumber) {
+          const barcodeHeight = Math.min(Math.max(40, 50 * scaleY), ch - y - margin);
+          newElements.push({
+            id: uuidv4(), 
+            type: 'barcode',
+            x: margin,
+            y,
+            width: Math.min(contentWidth * 0.4, 300 * scaleX),
+            height: barcodeHeight,
+            value: String(batchNumber),
+            format: 'CODE128', 
+            fill: '#000',
+            draggable: true, 
+            visible: true, 
+            layer: 0
+          } as BarcodeElement);
+        }
+      }
+      
+      console.log('>> enhanced elements:', newElements);
       
       pushHistory(elements);  // เก็บประวัติสำหรับ undo
       setElements(newElements);  // อัพเดท canvas ด้วย elements ใหม่
 
       setBatchModalVisible(false);
-      message.success('Sync และสร้าง elements สำเร็จ');
+      message.success('Sync และสร้าง elements สำเร็จ พร้อม QR Code และ Barcode');
     } catch (error) {
       message.error('ไม่สามารถดึงข้อมูล Batch ได้');
       console.error('Error fetching batch:', error);
@@ -2614,37 +2549,94 @@ export default function TemplateDesigner({ templateId, initialTemplate }: { temp
         open={templateInfoModal}
         onOk={handleSaveTemplate}
         onCancel={() => setTemplateInfoModal(false)}
+        width={600}
       >
         <div style={{ marginBottom: 16 }}>
-          <Input
-            placeholder="Template Name"
-            value={templateInfo.name}
-            onChange={e => setTemplateInfo(prev => ({ ...prev, name: e.target.value }))}
-            style={{ marginBottom: 8 }}
-          />
-          <Input.TextArea
-            placeholder="Description"
-            value={templateInfo.description}
-            onChange={e => setTemplateInfo(prev => ({ ...prev, description: e.target.value }))}
-            style={{ marginBottom: 8 }}
-          />
-          <Input
-            placeholder="Product Code"
-            value={templateInfo.productKey}
-            onChange={e => setTemplateInfo(prev => ({ ...prev, productKey: e.target.value }))}
-            style={{ marginBottom: 8 }}
-          />
-          <Input
-            placeholder="Customer Code"
-            value={templateInfo.customerKey}
-            onChange={e => setTemplateInfo(prev => ({ ...prev, customerKey: e.target.value }))}
-          />
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Template Name *</label>
+            <Input
+              placeholder="Enter template name"
+              value={templateInfo.name}
+              onChange={e => setTemplateInfo(prev => ({ ...prev, name: e.target.value }))}
+              style={{ marginBottom: 8 }}
+            />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Description</label>
+            <Input.TextArea
+              placeholder="Additional description"
+              value={templateInfo.description}
+              onChange={e => setTemplateInfo(prev => ({ ...prev, description: e.target.value }))}
+              style={{ marginBottom: 8 }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Product Code</label>
+              <Input
+                placeholder="Product Code"
+                value={templateInfo.productKey}
+                onChange={e => setTemplateInfo(prev => ({ ...prev, productKey: e.target.value }))}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Customer Code</label>
+              <Input
+                placeholder="Customer Code"
+                value={templateInfo.customerKey}
+                onChange={e => setTemplateInfo(prev => ({ ...prev, customerKey: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Paper Size</label>
+              <Select
+                style={{ width: '100%' }}
+                value={templateInfo.paperSize}
+                onChange={paperSize => setTemplateInfo(prev => ({ ...prev, paperSize }))}
+              >
+                <Option value="2x3">2" × 3"</Option>
+                <Option value="4x4">4" × 4"</Option>
+                <Option value="4x6">4" × 6"</Option>
+                <Option value="A4">A4</Option>
+                <Option value="A6">A6</Option>
+                <Option value="OTHER">Custom</Option>
+              </Select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Orientation</label>
+              <Select
+                style={{ width: '100%' }}
+                value={templateInfo.orientation}
+                onChange={orientation => setTemplateInfo(prev => ({ ...prev, orientation }))}
+              >
+                <Option value="Portrait">Portrait</Option>
+                <Option value="Landscape">Landscape</Option>
+              </Select>
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Template Type</label>
+            <Select
+              style={{ width: '100%' }}
+              value={templateInfo.templateType}
+              onChange={templateType => setTemplateInfo(prev => ({ ...prev, templateType }))}
+            >
+              <Option value="INNER">INNER</Option>
+              <Option value="OUTER">OUTER</Option>
+              <Option value="BOX">BOX</Option>
+              <Option value="PALLET">PALLET</Option>
+              <Option value="CUSTOM">CUSTOM</Option>
+            </Select>
+          </div>
         </div>
       </Modal>
     </Layout>
   );
 }
 
+// ยกเลิกฟังก์ชันด้านล่างเนื่องจากมีการประกาศซ้ำซ้อน
 // Memoized components for performance
 const MemoGroup = React.memo(Group);
 const MemoRect = React.memo(Rect);
@@ -2656,7 +2648,7 @@ const MinusIcon = () => (
   <MinusOutlined />
 );
 
-// เพิ่มฟังก์ชัน getComponentContent
+// Add utility function getComponentContent
 const getComponentContent = (el: ElementType) => {
   if (el.type === 'text') {
     const textEl = el as TextElement;
@@ -2678,7 +2670,7 @@ const getComponentContent = (el: ElementType) => {
     };
   } else if (el.type === 'image') {
     const imageEl = el as ImageElement;
-    // ส่งเฉพาะข้อความอ้างอิงถึงรูปภาพ ไม่ส่ง data URL ขนาดใหญ่
+    // Only send the reference text for the image, not the large data URL
     return {
       placeholder: 'image_reference' 
     };
@@ -2690,4 +2682,50 @@ const getComponentContent = (el: ElementType) => {
   }
   
   return {};
+};
+
+// Function to compress image data URL
+const compressImageDataUrl = async (dataUrl: string, quality: number = 0.7): Promise<string> => {
+  if (!dataUrl || !dataUrl.startsWith('data:image')) {
+    return dataUrl;
+  }
+  
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      
+      // Calculate new size (reduced by 30%)
+      let { width, height } = img;
+      let scale = quality * 1.0;
+      
+      width = Math.floor(width * scale);
+      height = Math.floor(height * scale);
+      
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(dataUrl);
+        return;
+      }
+      
+      // Draw image on canvas with reduced size
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // Convert canvas back to data URL
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+      
+      console.log(`Reduced image size from ${dataUrl.length} to ${compressedDataUrl.length} bytes`);
+      resolve(compressedDataUrl);
+    };
+    
+    img.onerror = () => {
+      // If loading fails, return original value
+      resolve(dataUrl);
+    };
+    
+    img.src = dataUrl;
+  });
 };

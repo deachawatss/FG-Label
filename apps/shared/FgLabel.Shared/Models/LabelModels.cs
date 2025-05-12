@@ -60,6 +60,49 @@ public class BatchInfo
     public string? Zip_Code { get; set; }
     public DateTime? DateExpiry { get; set; }
     public DateTime? FinalExpiryDate { get; set; }
+    
+    // เพิ่มฟิลด์ใหม่จาก BME_LABEL
+    public string? PACKUNIT1 { get; set; }
+    public decimal? PACKSIZE2 { get; set; }
+    public string? PACKUNIT2 { get; set; }
+    public int? SHELFLIFE_MONTH { get; set; }
+    public int? SHELFLIFE_DAY { get; set; }
+    public string? LABEL_COLOR { get; set; }
+    public string? PRODUCT { get; set; }
+    public string? DESCRIPTION { get; set; }
+    public string? LOT_CODE { get; set; }
+    public string? BEST_BEFORE { get; set; }
+    public string? CUSTITEMCODE { get; set; }
+    public string? ALLERGEN1 { get; set; }
+    public string? ALLERGEN2 { get; set; }
+    public string? ALLERGEN3 { get; set; }
+    public string? STORECAP1 { get; set; }
+    public string? GMO1 { get; set; }
+    public string? INGREDLIST1 { get; set; }
+    public string? INGREDLIST2 { get; set; }
+    public string? INGREDLIST3 { get; set; }
+    public string? COUNTRYOFORIGIN { get; set; }
+    public string? THAINAME { get; set; }
+    public string? FDANUMBER { get; set; }
+    public string? INGREDIENTTHAI1 { get; set; }
+    public string? INGREDIENTTHAI2 { get; set; }
+    public string? INGREDIENTTHAI3 { get; set; }
+    public string? ALLERGENTHAI1 { get; set; }
+    public string? ALLERGENTHAI2 { get; set; }
+    public string? PRODUCT_NAME_IN_ARABIC { get; set; }
+    public string? INGREDIENT_LIST_IN_ARABIC_1 { get; set; }
+    public string? INGREDIENT_LIST_IN_ARABIC_2 { get; set; }
+    public string? INGREDIENT_LIST_IN_ARABIC_3 { get; set; }
+    public string? ALLERGEN_IN_ARABIC_1 { get; set; }
+    public string? ALLERGEN_IN_ARABIC_2 { get; set; }
+    public string? ALLERGEN_IN_ARABIC_3 { get; set; }
+    public string? PRODUCT_NAME_IN_CHINESE { get; set; }
+    public string? INGREDIENT_LIST_IN_CHINESE_1 { get; set; }
+    public string? INGREDIENT_LIST_IN_CHINESE_2 { get; set; }
+    public string? INGREDIENT_LIST_IN_CHINESE_3 { get; set; }
+    public string? ALLERGEN_IN_CHINESE_1 { get; set; }
+    public string? ALLERGEN_IN_CHINESE_2 { get; set; }
+    public string? ALLERGEN_IN_CHINESE_3 { get; set; }
 }
 
 public record LabelTemplate

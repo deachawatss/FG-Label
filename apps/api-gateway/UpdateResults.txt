@@ -1,4 +1,0 @@
-Added ProductKey column to FgL.LabelTemplate
-Added CustomerKey column to FgL.LabelTemplate
-FgL.LabelTemplateMapping table already exists
-Database update completed
