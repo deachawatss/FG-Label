@@ -32,6 +32,7 @@ using FgLabel.Shared.Utilities;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
 using FgLabel.Api.Repositories;
+using FgLabel.Api.Models;
 using SharedModels = FgLabel.Shared.Models;
 
 namespace FgLabel.Api;
@@ -417,6 +418,7 @@ public class Program
         builder.Services.AddScoped<IBatchService, BatchService>();
         builder.Services.AddScoped<ITemplateService, TemplateService>();
         builder.Services.AddScoped<IBatchRepository, BatchRepository>();
+        builder.Services.AddScoped<ILabelRepository, LabelRepository>();
         builder.Services.AddScoped<ILabelTemplateRepository>(sp => 
             new LabelTemplateRepository(
                 sp.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection")!,
@@ -707,6 +709,16 @@ public class Program
         }).RequireAuthorization();
 
         /* ---------- 4.5  SignalR hub route ------------------------------- */
+        app.MapGet("/api/labels/{batchNo}", async (ILabelRepository repo, string batchNo)
+            => await repo.GetAsync(batchNo) is { } dto 
+                ? Results.Ok(dto) 
+                : Results.NotFound());
+
+        app.MapPut("/api/labels/{batchNo}", async (ILabelRepository repo, string batchNo, UpdateLabelRequest req)
+            => await repo.UpdateAsync(batchNo, req) 
+                ? Results.Ok(await repo.GetAsync(batchNo))
+                : Results.NotFound());
+
         app.MapHub<Hubs.JobHub>("/hubs/jobs").RequireAuthorization();
 
         /* ---------- 4.6  GET /api/me --------------------------------------- */
