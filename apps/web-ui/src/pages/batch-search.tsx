@@ -1533,16 +1533,16 @@ function BatchSearch() {
     
     return (
       <Modal
-        title={`ตัวอย่างฉลาก: ${previewBatchNo || ''}`}
+        title={`Label Preview: ${previewBatchNo || ''}`}
         visible={batchPreviewModalVisible}
         onCancel={() => setBatchPreviewModalVisible(false)}
         width={800}
         footer={[
           <Button key="edit" type="default" onClick={handleEditTemplateFromPreview} icon={<EditOutlined />}>
-            แก้ไขแม่แบบ
+            Edit Template
           </Button>,
           <Button key="print" type="primary" onClick={handlePrintFromPreview} loading={isPrinting} icon={<PrinterOutlined />}>
-            พิมพ์
+            Print
           </Button>
         ]}
       >
@@ -1550,7 +1550,7 @@ function BatchSearch() {
           {previewError && <div className="error-message">{previewError}</div>}
           
           <Tabs defaultActiveKey="label">
-            <TabPane tab="ฉลาก" key="label">
+            <TabPane tab="Label" key="label">
               <div style={{ border: '1px solid #ccc', minHeight: '300px', padding: '10px' }}>
                 {htmlZplPreview ? (
                   <iframe 
@@ -1559,25 +1559,25 @@ function BatchSearch() {
                   />
                 ) : (
                   <div style={{ textAlign: 'center', padding: '20px' }}>
-                    ไม่มีข้อมูลตัวอย่าง
+                    No preview data
                   </div>
                 )}
               </div>
             </TabPane>
             
-            <TabPane tab="ตั้งค่า" key="settings">
+            <TabPane tab="Settings" key="settings">
               <div style={{ padding: '10px' }}>
                 <div style={{ marginBottom: '15px' }}>
-                  <div style={{ marginBottom: '8px' }}>ช่วงถุง:</div>
+                  <div style={{ marginBottom: '8px' }}>Bag Range:</div>
                   <Space>
-                    <span>ถุงเริ่มต้น:</span>
+                    <span>Start Bag:</span>
                     <InputNumber 
                       min={1} 
                       value={startBag} 
                       onChange={(value) => setStartBag(value || 1)} 
                     />
                     
-                    <span>ถุงสุดท้าย:</span>
+                    <span>End Bag:</span>
                     <InputNumber 
                       min={1} 
                       value={endBag} 
@@ -1587,7 +1587,7 @@ function BatchSearch() {
                 </div>
                 
                 <div style={{ marginBottom: '15px' }}>
-                  <div style={{ marginBottom: '8px' }}>พิมพ์พิเศษ:</div>
+                  <div style={{ marginBottom: '8px' }}>Special Print:</div>
                   <Space direction="vertical">
                     <Checkbox checked={qcSample} onChange={(e) => setQcSample(e.target.checked)}>
                       QC SAMPLE
@@ -1602,10 +1602,10 @@ function BatchSearch() {
                 </div>
                 
                 <div>
-                  <div style={{ marginBottom: '8px' }}>เครื่องพิมพ์:</div>
+                  <div style={{ marginBottom: '8px' }}>Printer:</div>
                   <Select
                     style={{ width: '100%' }}
-                    placeholder="เลือกเครื่องพิมพ์"
+                    placeholder="Select Printer"
                     value={selectedPrinter}
                     onChange={(value) => setSelectedPrinter(value)}
                   >
@@ -1630,10 +1630,19 @@ function BatchSearch() {
   };
   
   // เพิ่มฟังก์ชัน fetchBatches ที่เรียกใช้ในฟอร์ม
-  const fetchBatches = () => {
-    templatesCache.current = [];
-    fetchAndMatchData();
-  };
+  const fetchBatches = async () => {
+    setLoading(true);
+    try {
+        const response = await api.get(`/api/batch/${batchSearchText}`);
+        const data = response.data;
+        setBatches(data.map(extractBatchData));
+        setFilteredBatches(data.map(extractBatchData));
+    } catch (error) {
+        setError('Failed to fetch batch data');
+    } finally {
+        setLoading(false);
+    }
+};
   
   // ใช้ AutoComplete แทน Input สำหรับ BatchNo
   const renderSearchForm = () => {
@@ -1641,7 +1650,7 @@ function BatchSearch() {
       <div className={styles.searchForm}>
         <AutoComplete
           style={{ width: 200 }}
-          placeholder="รหัส Batch"
+          placeholder="Batch No"
           value={searchText}
           onChange={(value) => {
             setSearchText(value);
@@ -1662,7 +1671,7 @@ function BatchSearch() {
         />
         
         <Input 
-          placeholder="รหัส Lot" 
+          placeholder="Lot Code" 
           value={lotCodeSearchText}
           onChange={(e) => setLotCodeSearchText(e.target.value)}
           style={{ width: 200 }}
@@ -1682,14 +1691,14 @@ function BatchSearch() {
           onClick={handleSearch} 
           icon={<SearchOutlined />}
         >
-          ค้นหา
+          Search
         </Button>
         
         <Button 
           onClick={fetchBatches} 
           icon={<ReloadOutlined />}
         >
-          รีเฟรช
+          Refresh
         </Button>
       </div>
     );

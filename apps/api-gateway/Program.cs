@@ -423,39 +423,23 @@ public class Program
                 sp.GetRequiredService<ILogger<LabelTemplateRepository>>()
             ));
 
-        // Configure LDAP
+        // Load LDAP configuration from environment variables
+        var ldapServer = Environment.GetEnvironmentVariable("AD__Url") ?? "ldap://default";
+        var ldapBaseDn = Environment.GetEnvironmentVariable("AD__BaseDn") ?? "DC=example,DC=com";
+        var ldapUser = Environment.GetEnvironmentVariable("AD__Username") ?? "defaultUser";
+        var ldapPassword = Environment.GetEnvironmentVariable("AD__Password") ?? "defaultPassword";
         var isLdapBypassed = Environment.GetEnvironmentVariable("BYPASS_LDAP")?.ToLower() == "true";
-        if (isLdapBypassed)
-        {
-            Console.WriteLine("[FgLabel] LDAP bypass enabled. Authentication will always succeed in dev mode.");
-            Console.WriteLine("[FgLabel] LDAP connection testing skipped due to bypass setting.");
-        }
-        else
-        {
-            // Get LDAP configuration from environment variables
-            var ldapConfig = new LdapConfig
-            {
-                Url = Environment.GetEnvironmentVariable("AD__Url") ?? "ldap://192.168.0.1",
-                BaseDn = Environment.GetEnvironmentVariable("AD__BaseDn") ?? "OU=Thailand,DC=NWFTH,DC=com",
-                Username = Environment.GetEnvironmentVariable("AD__Username") ?? "deachawat@newlywedsfoods.co.th",
-                Password = Environment.GetEnvironmentVariable("AD__Password") ?? "Nwfth.c0m2026",
-                TimeoutSeconds = 5,
-                DefaultDomain = "newlywedsfoods.co.th"
-            };
 
-            // Configure LDAP service
-            builder.Services.Configure<LdapConfig>(options =>
-            {
-                options.Url = ldapConfig.Url;
-                options.BaseDn = ldapConfig.BaseDn;
-                options.Username = ldapConfig.Username;
-                options.Password = ldapConfig.Password;
-                options.TimeoutSeconds = ldapConfig.TimeoutSeconds;
-                options.DefaultDomain = ldapConfig.DefaultDomain;
-            });
+        Console.WriteLine($"[LDAP] Server={ldapServer}, BaseDn={ldapBaseDn}, User={ldapUser}");
 
-            builder.Services.AddScoped<ILdapService, LdapService>();
-        }
+        // ลงทะเบียน LDAP service
+        builder.Services.Configure<LdapConfig>(options => {
+            options.Url = ldapServer;
+            options.BaseDn = ldapBaseDn;
+            options.Username = ldapUser;
+            options.Password = ldapPassword;
+        });
+        builder.Services.AddSingleton<ILdapService, LdapService>();
 
         /* ------------------------------------------------------------------ */
         Console.WriteLine("[FgLabel] Before builder.Build()");
@@ -466,20 +450,39 @@ public class Program
         if (!isLdapBypassed)
         {
             using var scope = app.Services.CreateScope();
-            var ldapService = scope.ServiceProvider.GetRequiredService<ILdapService>();
-            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            var ldapOptions = scope.ServiceProvider.GetRequiredService<IOptions<LdapConfig>>().Value;
+            var ldapServiceScope = scope.ServiceProvider.GetService<ILdapService>();
+            var loggerScope = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            var ldapOptions = scope.ServiceProvider.GetService<IOptions<LdapConfig>>()?.Value;
 
             try
             {
-                if (!ldapService.TestConnection())
+                if (ldapServiceScope == null)
+                {
+                    loggerScope.LogWarning("[FgLabel] LDAP service not available");
+                    if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development")
+                    {
+                        loggerScope.LogWarning("[FgLabel] ⚠️ Warning: Continuing in development mode without LDAP.");
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("LDAP service not registered properly");
+                    }
+                }
+                else if (!ldapServiceScope.TestConnection())
                 {
                     var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
                     if (env == "Development" || env == "dev")
                     {
-                        logger.LogWarning("[FgLabel] ⚠️ Warning: LDAP connection failed but continuing in development mode.");
-                        logger.LogWarning("[FgLabel] LDAP URL: {Url}", ldapOptions.Url);
-                        logger.LogWarning("[FgLabel] LDAP BaseDN: {BaseDn}", ldapOptions.BaseDn);
+                        loggerScope.LogWarning("[FgLabel] ⚠️ Warning: LDAP connection failed but continuing in development mode.");
+                        if (ldapOptions != null)
+                        {
+                            loggerScope.LogWarning("[FgLabel] LDAP URL: {Url}", ldapOptions.Url);
+                            loggerScope.LogWarning("[FgLabel] LDAP BaseDN: {BaseDn}", ldapOptions.BaseDn);
+                        }
+                        else
+                        {
+                            loggerScope.LogWarning("[FgLabel] LDAP configuration is not available");
+                        }
                     }
                     else
                     {
@@ -488,7 +491,7 @@ public class Program
                 }
                 else
                 {
-                    logger.LogInformation("[FgLabel] LDAP connection test successful");
+                    loggerScope.LogInformation("[FgLabel] LDAP connection test successful");
                 }
             }
             catch (Exception ex)
@@ -530,7 +533,7 @@ public class Program
         // ------------------------------------------------------------------ //
 
         /* ---------- 4.1  POST /api/auth/login --------------------------------- */
-        app.MapPost("/api/auth/login", async (LoginRequest login, ILdapService? ldap, ILogger<Program> log) =>
+        app.MapPost("/api/auth/login", async (LoginRequest login, ILogger<Program> log) =>
         {
             // Mask password in logs
             log.LogInformation("/api/auth/login username: {Username}", login.username);
@@ -538,7 +541,7 @@ public class Program
             try 
             {
                 var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-                if (env == "Development" || env == "dev" || ldap == null)
+                if (env == "Development" || env == "dev")
                 {
                     // Development mode or LDAP bypass mode
                     var bypassToken = GenerateJwtToken(login.username);
@@ -546,8 +549,16 @@ public class Program
                     return Results.Ok(new { token = bypassToken, user = new { username = login.username } });
                 }
 
+                // ในโหมดการทำงานจริง ให้ใช้ LDAP
+                var ldapService = app.Services.GetService<ILdapService>();
+                if (ldapService == null)
+                {
+                    log.LogError("LDAP service not available");
+                    return Results.Problem("LDAP service not available");
+                }
+
                 // LDAP validation can be slow, run it in a background thread to avoid blocking
-                var isValid = await Task.Run(() => ldap.ValidateUser(login.username, login.password));
+                var isValid = await Task.Run(() => ldapService.ValidateUser(login.username, login.password));
                 if (!isValid)
                 {
                     log.LogWarning("Login failed for user: {Username}", login.username);
@@ -1128,4 +1139,8 @@ public class Program
         // Start the application
         await app.RunAsync();
     }
+
+    // Add static helper at bottom of file
+    private static object? GetValueByType(object source, string prop) =>
+        source.GetType().GetProperty(prop)?.GetValue(source);
 }

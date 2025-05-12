@@ -633,62 +633,6 @@ GO
 PRINT 'Creating view FgL.vw_Label_PrintData';
 GO
 
-/* FG-Label Database Schema installation or update completed */
-PRINT 'FG-Label Database Schema installation or update completed';
-PRINT 'All objects in schema FgL have been created and updated successfully';
-GO
-
-/* ---------- PATCH: create mapping + view + proc + constraints ---------- */
-----------------------------------------------
--- 1) Table FgL.LabelTemplateMapping
-----------------------------------------------
-IF OBJECT_ID('FgL.LabelTemplateMapping','U') IS NULL
-BEGIN
-    CREATE TABLE FgL.LabelTemplateMapping(
-        MappingID INT IDENTITY(1,1) PRIMARY KEY,
-        TemplateID INT NOT NULL,
-        ProductKey VARCHAR(50) NULL,
-        CustomerKey VARCHAR(50) NULL,
-        IsActive BIT NOT NULL DEFAULT 1,
-        CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
-        CONSTRAINT FK_LTM_Template FOREIGN KEY(TemplateID)
-            REFERENCES FgL.LabelTemplate(TemplateID) ON DELETE CASCADE
-    );
-    CREATE NONCLUSTERED INDEX IX_LTM_Product_Customer
-        ON FgL.LabelTemplateMapping(ProductKey,CustomerKey)
-        INCLUDE(TemplateID,IsActive);
-END
-GO
-
-----------------------------------------------
--- 2) FK Cascade for components
-----------------------------------------------
-IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_LabelTemplateComponent_Template')
-    ALTER TABLE FgL.LabelTemplateComponent
-        DROP CONSTRAINT FK_LabelTemplateComponent_Template;
-GO
-ALTER TABLE FgL.LabelTemplateComponent
-    ADD CONSTRAINT FK_LTC_Template
-        FOREIGN KEY(TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
-        ON DELETE CASCADE;
-GO
-
-----------------------------------------------
--- 3) JSON validity check
-----------------------------------------------
-IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name='CK_LabelTemplate_Content_JSON')
-    ALTER TABLE FgL.LabelTemplate
-        ADD CONSTRAINT CK_LabelTemplate_Content_JSON
-            CHECK (Content IS NULL OR ISJSON(Content)=1);
-GO
-
-----------------------------------------------
--- 4) VIEW  FgL.vw_Label_PrintData  (ฉบับเต็ม)
-----------------------------------------------
-IF OBJECT_ID('FgL.vw_Label_PrintData','V') IS NOT NULL
-    DROP VIEW FgL.vw_Label_PrintData;
-GO
-
 CREATE VIEW FgL.vw_Label_PrintData
 AS
 SELECT 
@@ -706,7 +650,6 @@ SELECT
     PN.ActCompletionDate,
     
     -- Data from INMAST and BME_LABEL
-    -- ใช้ข้อมูลจาก BME_LABEL ก่อน หากไม่มีจึงใช้จาก INMAST
     COALESCE(BL.ItemKey, IM.ItemKey, PN.ItemKey) AS ItemKey,
     COALESCE(IM.Desc1, BL.PRODUCT) AS ProductName,
     COALESCE(IM.Desc2, BL.DESCRIPTION) AS ProductDesc,
@@ -808,19 +751,15 @@ SELECT
     T.PaperSize
 FROM 
     dbo.PNMAST PN
--- เปลี่ยนการเชื่อมโยงให้ใช้ CustKey สำหรับหาลูกค้า
 LEFT JOIN 
     dbo.ARCUST AR ON PN.CustKey = AR.Customer_Key
--- เพิ่มการเชื่อมโยงโดยตรงไปยัง BME_LABEL ด้วย CustKey
 LEFT JOIN 
     FgL.BME_LABEL BL ON (
         (PN.ItemKey IS NOT NULL AND PN.ItemKey = BL.ItemKey) OR
         (PN.CustKey IS NOT NULL AND PN.CustKey = BL.CustKey)
     )
--- เมื่อมีข้อมูล ItemKey จาก PN หรือ BL ให้เชื่อมโยงกับ INMAST
 LEFT JOIN 
     dbo.INMAST IM ON COALESCE(PN.ItemKey, BL.ItemKey) = IM.ItemKey
--- เชื่อมโยงกับ INLOC ตามข้อมูลที่มี
 LEFT JOIN (
     SELECT * FROM dbo.INLOC
     WHERE [InclassKey] = 'FG'
@@ -832,7 +771,6 @@ LEFT JOIN
 CROSS APPLY (
     SELECT TotalBags = CAST(
         CASE 
-            -- ตรวจสอบข้อมูลจากตาราง BME_LABEL เพื่อคำนวณจำนวนถุงทั้งหมด
             WHEN BL.PACKUNIT1 IS NOT NULL AND BL.PACKUNIT2 IS NOT NULL AND BL.PACKSIZE1 IS NOT NULL AND BL.PACKSIZE2 IS NOT NULL THEN
                 CASE
                     WHEN BL.PACKUNIT2 LIKE '%bag%' OR BL.PACKUNIT2 LIKE '%BAG%' OR BL.PACKUNIT2 LIKE '%ถุง%' 
@@ -868,17 +806,13 @@ CROSS APPLY (
                     ELSE 
                         CEILING(ISNULL(IL.QtyOnHand, 0) / ISNULL(NULLIF(BL.PACKSIZE1, 0), 1))
                 END
-                
-            -- สำหรับแต่ละ BatchNo ให้มี TotalBags ที่แตกต่างกันแทนที่จะเป็น 10 เสมอ
-            -- ใช้ BatchNo เป็นเลขฐานในการคำนวณ
+            
             WHEN ISNULL(IL.QtyOnHand, 0) > 0 THEN 
                 CEILING(IL.QtyOnHand)
             ELSE
                 CASE
-                    -- คำนวณ TotalBags จาก BatchNo ถ้าสามารถแปลงเป็นตัวเลขได้
                     WHEN ISNUMERIC(PN.BatchNo) = 1 THEN
-                        (CAST(PN.BatchNo AS INT) % 90) + 10  -- ให้มีค่าระหว่าง 10-99
-                    -- ถ้าไม่สามารถแปลงได้ ใช้ความยาวของ BatchNo
+                        (CAST(PN.BatchNo AS INT) % 90) + 10
                     ELSE
                         LEN(PN.BatchNo) + 10
                 END
@@ -888,8 +822,7 @@ CROSS APPLY (
 OUTER APPLY 
     dbo.tvf_GetBagNumbersRange(PN.BatchNo, 1, CalcBags.TotalBags, CalcBags.TotalBags) BG
 WHERE 
-    PN.BatchNo IS NOT NULL
-    AND ISNULL(PN.Status,'') NOT IN ('CANCELED', 'CANCELLED');
+    PN.BatchNo IS NOT NULL;
 GO
 
 ----------------------------------------------

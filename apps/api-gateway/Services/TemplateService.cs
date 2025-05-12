@@ -128,7 +128,7 @@ namespace FgLabel.Api.Services
             return templateId;
         }
 
-        public async Task<int> SaveTemplateAsync(CreateTemplateRequest request)
+        public async Task<int> SaveTemplateAsync(CreateTemplateRequest dto)
         {
             await using var connection = _sql.GetConnection();
             await connection.OpenAsync();
@@ -136,179 +136,98 @@ namespace FgLabel.Api.Services
 
             try
             {
-                // บันทึก log ข้อมูลที่ได้รับ
-                _logger.LogInformation("Saving template: {RequestName}, ProductKey: {ProductKey}, CustomerKey: {CustomerKey}, Components: {ComponentCount}",
-                    request.Name, request.ProductKey, request.CustomerKey, request.Components?.Count ?? 0);
+                // Log the incoming request
+                _logger.LogInformation("Saving template: {Name}", dto.Name);
 
-                // ตรวจสอบค่าที่จำเป็น
-                if (string.IsNullOrWhiteSpace(request.Name))
-                {
-                    throw new ArgumentException("Template name is required");
-                }
-                
-                if (string.IsNullOrWhiteSpace(request.Content))
-                {
-                    throw new ArgumentException("Template content is required");
-                }
-
-                // ตรวจสอบว่ามีเทมเพลตที่มีชื่อ, ProductKey และ CustomerKey เหมือนกันหรือไม่
-                var existingTemplate = await connection.QueryFirstOrDefaultAsync<LabelTemplate>(
-                    @"SELECT * FROM FgL.LabelTemplate 
-                      WHERE Name = @Name 
-                      AND (ProductKey = @ProductKey OR (ProductKey IS NULL AND @ProductKey IS NULL))
-                      AND (CustomerKey = @CustomerKey OR (CustomerKey IS NULL AND @CustomerKey IS NULL))
-                      AND Active = 1",
-                    new { 
-                        request.Name,
-                        request.ProductKey,
-                        request.CustomerKey
+                // Insert or update template
+                var templateId = await connection.ExecuteScalarAsync<int>(
+                    @"MERGE INTO FgL.LabelTemplate AS target
+                    USING (VALUES (@Name, @ProductKey, @CustomerKey)) AS source (Name, ProductKey, CustomerKey)
+                    ON target.Name = source.Name AND target.ProductKey = source.ProductKey AND target.CustomerKey = source.CustomerKey
+                    WHEN MATCHED THEN 
+                        UPDATE SET Description = @Description, Engine = @Engine, PaperSize = @PaperSize, Orientation = @Orientation, Content = @Content, UpdatedAt = SYSUTCDATETIME()
+                    WHEN NOT MATCHED THEN
+                        INSERT (Name, Description, Engine, PaperSize, Orientation, Content, ProductKey, CustomerKey, CreatedAt)
+                        VALUES (source.Name, @Description, @Engine, @PaperSize, @Orientation, @Content, source.ProductKey, source.CustomerKey, SYSUTCDATETIME())
+                    OUTPUT inserted.TemplateID;",
+                    new
+                    {
+                        dto.Name,
+                        dto.Description,
+                        dto.Engine,
+                        dto.PaperSize,
+                        dto.Orientation,
+                        dto.Content,
+                        dto.ProductKey,
+                        dto.CustomerKey
                     }, tran);
 
-                int templateId;
-                
-                if (existingTemplate != null)
+                // Optional product/customer mapping
+                if (!string.IsNullOrWhiteSpace(dto.ProductKey) || !string.IsNullOrWhiteSpace(dto.CustomerKey))
                 {
-                    // อัพเดตเทมเพลตที่มีอยู่แล้ว
-                    templateId = existingTemplate.TemplateID;
-                    var newVersion = Math.Floor((decimal)(existingTemplate.Version * 100 + 1)) / 100; // เพิ่มเวอร์ชันขึ้น 0.01
-
-                    _logger.LogInformation("Found existing template with ID: {TemplateId}, updating version from {OldVersion} to {NewVersion}", 
-                        templateId, existingTemplate.Version, newVersion);
-
-                    await connection.ExecuteAsync(
-                        @"UPDATE FgL.LabelTemplate
-                          SET Description = @Description, 
-                              Engine = @Engine, 
-                              PaperSize = @PaperSize, 
-                              Orientation = @Orientation, 
-                              Content = @Content,
-                              Version = @Version, 
-                              UpdatedAt = SYSUTCDATETIME()
-                          WHERE TemplateID = @TemplateID",
-                        new {
-                            TemplateID = templateId,
-                            request.Description,
-                            request.Engine,
-                            request.PaperSize,
-                            request.Orientation,
-                            request.Content,
-                            Version = newVersion
-                        }, tran);
-
-                    // ลบ components เก่า
-                    await connection.ExecuteAsync(
-                        "DELETE FROM FgL.LabelTemplateComponent WHERE TemplateID = @TemplateID",
-                        new { TemplateID = templateId }, tran);
-                }
-                else
-                {
-                    // --- Insert main template --------------------------------------------------
-                    _logger.LogInformation("Creating new template record");
-                    templateId = await connection.ExecuteScalarAsync<int>(
-                        @"INSERT INTO FgL.LabelTemplate
-                            (Name, Description, Engine, PaperSize, Orientation, Content,
-                             ProductKey, CustomerKey, Version, Active, CreatedAt, UpdatedAt)
-                          VALUES
-                            (@Name, @Description, @Engine, @PaperSize, @Orientation, @Content,
-                             @ProductKey, @CustomerKey, 1, 1, SYSUTCDATETIME(), SYSUTCDATETIME());
-                          SELECT CAST(SCOPE_IDENTITY() AS int);",
-                        new {
-                            request.Name,
-                            request.Description,
-                            request.Engine,
-                            request.PaperSize,
-                            request.Orientation,
-                            request.Content,
-                            request.ProductKey,
-                            request.CustomerKey
-                        }, tran);
-
-                    _logger.LogInformation("Template record inserted with ID: {TemplateId}", templateId);
-                }
-
-                // --- Optional product/customer mapping ------------------------------------
-                if (!string.IsNullOrWhiteSpace(request.ProductKey) ||
-                    !string.IsNullOrWhiteSpace(request.CustomerKey))
-                {
-                    _logger.LogInformation("Checking for existing template mapping with ProductKey: {ProductKey}, CustomerKey: {CustomerKey}",
-                        request.ProductKey, request.CustomerKey);
+                    _logger.LogInformation("Creating template mapping with ProductKey: {ProductKey}, CustomerKey: {CustomerKey}",
+                        dto.ProductKey, dto.CustomerKey);
                     
-                    // ตรวจสอบและลบแมปปิ้งที่ซ้ำซ้อน
+                    // Check and delete any duplicate mappings
                     await connection.ExecuteAsync(
                         @"DELETE FROM FgL.LabelTemplateMapping 
-                          WHERE (ProductKey = @ProductKey OR @ProductKey IS NULL)
-                          AND (CustomerKey = @CustomerKey OR @CustomerKey IS NULL);",
+                          WHERE (ProductKey = @ProductKey OR (ProductKey IS NULL AND @ProductKey IS NULL))
+                          AND (CustomerKey = @CustomerKey OR (CustomerKey IS NULL AND @CustomerKey IS NULL));",
                         new { 
-                            request.ProductKey,
-                            request.CustomerKey 
+                            dto.ProductKey,
+                            dto.CustomerKey 
                         }, tran);
                         
-                    _logger.LogInformation("Inserting template mapping for ProductKey: {ProductKey}, CustomerKey: {CustomerKey}",
-                        request.ProductKey, request.CustomerKey);
-                        
+                    // Insert mapping with Priority = 5 as default
                     await connection.ExecuteAsync(
                         @"INSERT INTO FgL.LabelTemplateMapping
                               (TemplateID, ProductKey, CustomerKey, Priority, Active, CreatedAt)
                           VALUES
                               (@TemplateID, @ProductKey, @CustomerKey, 5, 1, SYSUTCDATETIME());",
-                        new { TemplateID = templateId,
-                              request.ProductKey,
-                              request.CustomerKey }, tran);
+                        new { 
+                            TemplateID = templateId,
+                            dto.ProductKey,
+                            dto.CustomerKey 
+                        }, tran);
                 }
 
-                // --- Insert each component ------------------------------------------------
-                if (request.Components?.Any() == true)
+                // Insert components
+                if (dto.Components?.Any() == true)
                 {
-                    _logger.LogInformation("Inserting {Count} template components", request.Components.Count);
-                    
-                    try {
-                        await connection.ExecuteAsync(
-                            @"INSERT INTO FgL.LabelTemplateComponent
-                                (TemplateID, ComponentType, X, Y, W, H, FontName, FontSize,
-                                 Placeholder, StaticText, BarcodeFormat, CreatedAt)
-                              VALUES
-                                (@TemplateID, @ComponentType, @X, @Y, @W, @H, @FontName, @FontSize,
-                                 @Placeholder, @StaticText, @BarcodeFormat, SYSUTCDATETIME());",
-                            request.Components.Select(c => new {
-                                TemplateID   = templateId,
-                                c.ComponentType,
-                                c.X,
-                                c.Y,
-                                c.W,
-                                c.H,
-                                c.FontName,
-                                c.FontSize,
-                                c.Placeholder,
-                                c.StaticText,
-                                c.BarcodeFormat
-                            }), tran);
-                    }
-                    catch (Exception ex)
+                    foreach (var component in dto.Components)
                     {
-                        _logger.LogError(ex, "Error inserting components: {ErrorMessage}", ex.Message);
-                        throw new Exception($"Error inserting components: {ex.Message}", ex);
+                        await connection.ExecuteAsync(
+                            "INSERT INTO FgL.LabelTemplateComponent (TemplateID, ComponentType, X, Y, W, H, FontName, FontSize, StaticText, Placeholder, BarcodeFormat) " +
+                            "VALUES (@TemplateID, @ComponentType, @X, @Y, @W, @H, @FontName, @FontSize, @StaticText, @Placeholder, @BarcodeFormat)",
+                            new
+                            {
+                                TemplateID = templateId,
+                                component.ComponentType,
+                                component.X,
+                                component.Y,
+                                component.W,
+                                component.H,
+                                component.FontName,
+                                component.FontSize,
+                                component.StaticText,
+                                component.Placeholder,
+                                component.BarcodeFormat
+                            }, tran);
                     }
                 }
 
+                // Commit transaction
                 await tran.CommitAsync();
-                _logger.LogInformation("Template saved successfully with ID: {TemplateId}", templateId);
+
+                _logger.LogInformation("Template saved successfully with ID: {TemplateID}", templateId);
+
                 return templateId;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error saving template: {ErrorMessage}", ex.Message);
-                
-                try
-                {
-                    await tran.RollbackAsync();
-                    _logger.LogInformation("Transaction rolled back due to error");
-                }
-                catch (Exception rollbackEx)
-                {
-                    _logger.LogError(rollbackEx, "Error rolling back transaction: {ErrorMessage}", rollbackEx.Message);
-                }
-                
-                throw new Exception($"Error saving template: {ex.Message}", ex);
+                _logger.LogError(ex, "Error saving template");
+                await tran.RollbackAsync();
+                throw;
             }
         }
     }
