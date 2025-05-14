@@ -5,7 +5,7 @@ using Dapper;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using FgLabel.Shared.Models;
+using FgLabel.Api.Models;
 
 namespace FgLabel.Api.Services;
 
@@ -69,17 +69,53 @@ public class BatchService : IBatchService
         var batches = await connection.QueryAsync<BatchDto>(
             @"SELECT TOP 50 
                 BatchNo, 
-                ProductKey, 
-                CustomerKey, 
+                ItemKey as ProductKey, 
+                CustKey as CustomerKey, 
                 ProductionDate 
-              FROM FgL.vw_Label_BatchInfo 
+              FROM FgL.vw_Label_PrintSummary 
               WHERE ProductionDate IS NOT NULL
                 AND BatchNo <> '999999'
-                AND CustomerKey IS NOT NULL
-                AND ProductKey IS NOT NULL
+                AND CustKey IS NOT NULL
+                AND ItemKey IS NOT NULL
               ORDER BY ProductionDate DESC");
 
         _logger.LogInformation("Retrieved {Count} current batches", batches.Count());
         return batches;
+    }
+
+    public async Task<IEnumerable<LabelRowDto>> GetBatchData(string batchNo, string? bagNo = null)
+    {
+        try
+        {
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+            
+            var query = @"
+                SELECT 
+                    BatchNo, ProductionDate, ItemKey as ProductKey, 
+                    CustKey as CustomerKey, Product as ProductName, 
+                    TotalBags, TemplateID, TemplateName, SchStartDate, BagNo, 
+                    BagSequence, BagPosition, PACKSIZE1, PACKUNIT1, 
+                    NET_WEIGHT1, SHELFLIFE_DAY, DaysToExpire, 
+                    ALLERGEN1, ALLERGEN2, ALLERGEN3, STORECAP1, 
+                    LOT_CODE, BEST_BEFORE, SONumber, ExpiryDate
+                FROM 
+                    FgL.vw_Label_PrintSummary  
+                WHERE 
+                    BatchNo = @BatchNo";
+
+            if (!string.IsNullOrEmpty(bagNo))
+            {
+                query += " AND BagNo = @BagNo";
+                return await connection.QueryAsync<LabelRowDto>(query, new { BatchNo = batchNo, BagNo = bagNo });
+            }
+
+            return await connection.QueryAsync<LabelRowDto>(query, new { BatchNo = batchNo });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in GetBatchData: {Message}", ex.Message);
+            return Array.Empty<LabelRowDto>();
+        }
     }
 }

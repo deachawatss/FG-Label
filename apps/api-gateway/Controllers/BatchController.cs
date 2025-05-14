@@ -1,7 +1,7 @@
 using System.Threading.Tasks;
-using FgLabel.Shared.Models;
 using FgLabel.Api.Repositories;
 using Microsoft.AspNetCore.Mvc;
+using FgLabel.Api.Models;
 
 namespace FgLabel.Api.Controllers
 {
@@ -17,9 +17,9 @@ namespace FgLabel.Api.Controllers
         }
 
         [HttpGet("{batchNo}")]
-        public async Task<ActionResult<BatchInfo>> GetBatchInfo(string batchNo)
+        public async Task<ActionResult<LabelRowDto>> GetBatchInfo(string batchNo, [FromQuery] string? bagNo = null)
         {
-            var batchInfo = await _batchRepository.GetBatchInfoAsync(batchNo);
+            var batchInfo = await _batchRepository.GetBatchPrintData(batchNo, bagNo);
             if (batchInfo == null)
             {
                 return NotFound();

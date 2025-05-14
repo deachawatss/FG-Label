@@ -1,6 +1,6 @@
 import axios from "axios";
-import type { AxiosRequestHeaders } from "axios";
 
+// ใช้ API URL ตามที่กำหนดใน environment โดยไม่ต้องเพิ่ม '/api' อีก
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5051/api',
   headers: {
@@ -15,8 +15,9 @@ api.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
     if (token) {
       // ใช้วิธีการกำหนด header แบบปลอดภัยกับ TypeScript
-      config.headers = config.headers || {};
-      config.headers.Authorization = `Bearer ${token}`;
+      if (config.headers) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
   }
   return config;

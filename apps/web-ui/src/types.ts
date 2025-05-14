@@ -13,5 +13,7 @@ export interface AuthContextType {
   refreshToken: () => Promise<void>;
   isAuthenticated: boolean;
   loading: boolean;
+  isAuthenticating: boolean;
+  error: string | null;
   user: User | null;
 } 

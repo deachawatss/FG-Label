@@ -9,6 +9,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [username, setUsername] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -22,14 +24,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (storedToken && storedUsername) {
       setToken(storedToken);
       setUsername(storedUsername);
-      api.get('/api/me')
+      setIsAuthenticating(true);
+      api.get('/me')
         .then((response) => {
           setUser(response.data);
-          setLoading(false);
+          setError(null);
         })
-        .catch(() => {
+        .catch((err) => {
           clearAuth();
+          setError('ไม่สามารถยืนยันตัวตนได้: ' + (err.response?.data?.message || err.message));
+        })
+        .finally(() => {
           setLoading(false);
+          setIsAuthenticating(false);
         });
     } else {
       setLoading(false);
@@ -54,16 +61,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (username: string, password: string) => {
     try {
       setLoading(true);
-      const response = await api.post('/api/auth/login', { username, password });
+      setIsAuthenticating(true);
+      setError(null);
+      const response = await api.post('/auth/login', { username, password });
       const { token, user } = response.data;
       
       setAuth(token, username);
       setUser(user);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login failed:', error);
+      setError('การเข้าสู่ระบบล้มเหลว: ' + (error.response?.data?.message || error.message));
       throw error;
     } finally {
       setLoading(false);
+      setIsAuthenticating(false);
     }
   };
 
@@ -74,16 +85,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshToken = async () => {
     try {
       setLoading(true);
-      const response = await api.post('/api/auth/refresh');
+      setIsAuthenticating(true);
+      setError(null);
+      const response = await api.post('/auth/refresh');
       const { token, user } = response.data;
       
       setAuth(token, username || '');
       setUser(user);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Token refresh failed:', error);
+      setError('การรีเฟรชโทเค็นล้มเหลว: ' + (error.response?.data?.message || error.message));
       clearAuth();
     } finally {
       setLoading(false);
+      setIsAuthenticating(false);
     }
   };
 
@@ -98,6 +113,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       refreshToken, 
       isAuthenticated: !!token, 
       loading, 
+      isAuthenticating,
+      error,
       user 
     }}>
       {children}

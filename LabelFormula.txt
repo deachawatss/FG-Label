@@ -1,0 +1,560 @@
+//==============================
+// Batch Allergen 3 – ส่วนหลังเครื่องหมาย “:”
+– (Batch Allergen Label 1)
+//==============================
+Numbervar A := Instr({BME_LABEL.ALLERGEN3}, ":");
+Numbervar B := Len({BME_LABEL.ALLERGEN3});
+IF IsNull({BME_LABEL.ALLERGEN3}) OR {BME_LABEL.ALLERGEN3} = "" THEN ""
+ELSE
+Stringvar C := Mid({BME_LABEL.ALLERGEN3}, A + 2, (B - A));
+
+
+//==============================
+// Batch Allergen 3 – ส่วนหน้าเครื่องหมาย “:”
+– (Batch Allergen CFP Asia Group)
+//==============================
+Numbervar A := Instr({BME_LABEL.ALLERGEN3}, ":");
+Numbervar B := Len({BME_LABEL.ALLERGEN3});
+IF IsNull({BME_LABEL.ALLERGEN3}) OR {BME_LABEL.ALLERGEN3} = "" THEN ""
+ELSE
+Stringvar C := Mid({BME_LABEL.ALLERGEN3}, 1, A - 1);
+
+
+//==============================
+// Batch Allergen 2 – ส่วนหลังเครื่องหมาย “:”
+– (Batch Allergen CFP EU)
+//==============================
+Numbervar A := Instr({BME_LABEL.ALLERGEN2}, ":");
+Numbervar B := Len({BME_LABEL.ALLERGEN2});
+IF IsNull({BME_LABEL.ALLERGEN2}) OR {BME_LABEL.ALLERGEN2} = "" THEN ""
+ELSE
+Stringvar C := Mid({BME_LABEL.ALLERGEN2}, A + 2, (B - A));
+
+//{BME_LABEL.ALLERGEN2}
+
+
+//==============================
+// Batch Allergen 2 – ส่วนหน้าเครื่องหมาย “:”
+– (Batch Allergen CFP EU Group)
+//==============================
+Numbervar A := Instr({BME_LABEL.ALLERGEN2}, ":");
+Numbervar B := Len({BME_LABEL.ALLERGEN2});
+IF IsNull({BME_LABEL.ALLERGEN2}) OR {BME_LABEL.ALLERGEN2} = "" THEN ""
+ELSE
+Stringvar C := Mid({BME_LABEL.ALLERGEN2}, 1, A - 1);
+
+
+//==============================
+// Override – กรณี Itemkey พิเศษ
+//==============================
+IF {BME_LABEL.Itemkey} = "TC410C05" THEN "แป้งสาลี" ELSE ""
+
+
+//==============================
+// Allergen 1 (ใช้ตรง ๆ เมื่อมีค่า)
+//==============================
+IF {BME_LABEL.ALLERGEN1} > "" THEN {BME_LABEL.ALLERGEN1} ELSE ""
+
+
+//==============================
+// Bag Number Start – Validate >= 1
+//==============================
+IF {?Bag Number Start} < 1 THEN 1 ELSE {?Bag Number Start} 
+
+
+//=============================================================
+// Batch No. + Pallet No. (รูปแบบตาม Process Cell)
+//=============================================================
+//({@Batch Product})&"-"&{@Batch Number}
+IF {PNMAST.ProcessCellId} = "JSBC-DOUGHLINE"      THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DOUGHLINE2"     THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DRYER"          THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DRYER2"         THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-CRACKERMEAL"    THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+IF {PNMAST.ProcessCellId} = "REPACK"  AND ({INMAST.Itemtyp} >= "510" AND {INMAST.Itemtyp} <= "599")
+                                               THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+IF {PNMAST.ProcessCellId} = "REPACK"  AND ({INMAST.Itemtyp} >= "660" AND {INMAST.Itemtyp} <= "670")
+                                               THEN {@Batch Number} & "-" & Right({@Batch Pallet Number}, 2) ELSE
+{@Batch Number}
+
+
+//=============================================================
+// Best‑Before Date คำนวณตาม Shelf‑life/WIP
+//=============================================================
+IF {@Batch Product Group} = "WIP"
+    THEN {@Batch Production Date} + {BME_LABEL_WIP.SHELFLIFE_DAY}
+ELSE
+IF {BME_LABEL.SHELFLIFE_DAY} = 0 AND {INMAST.DaysToExpire} = 0
+    THEN {@Batch Production Date} + {INMAST.DaysToExpire}
+ELSE 
+IF {BME_LABEL.SHELFLIFE_DAY} = 0 AND IsNull({INMAST.DaysToExpire})
+    THEN {@Batch Production Date} + 30
+ELSE
+{@Batch Production Date} + {BME_LABEL.SHELFLIFE_DAY}
+
+
+//==============================
+// Expiry Date Caption (เช่น BEST BEFORE)
+//==============================
+IF {BME_LABEL.EXPIRYDATECAP} > ""     THEN UpperCase({BME_LABEL.EXPIRYDATECAP}) ELSE
+IF {BME_LABEL.EXPIRYDATECAP} = ""     THEN "BEST BEFORE"                         ELSE
+IF IsNull({BME_LABEL.EXPIRYDATECAP})  THEN "BEST BEFORE"                         ELSE
+"BEST BEFORE"
+
+
+//==============================
+// Country of Origin – แสดงพร้อมคำนำหน้า
+//==============================
+IF {BME_LABEL.COUNTRYOFORIGIN} > ""
+THEN "Country of Origin : " & {BME_LABEL.COUNTRYOFORIGIN}
+ELSE ""
+
+
+//=============================================================
+// Customer Code / Batch Product Group (ตาม CustKey)
+//=============================================================
+IF {PNBomInfo.CustKey} = "INN01" THEN {PNBomInfo.CustKey} ELSE
+IF {PNBomInfo.CustKey} = "SVT01" THEN {PNBomInfo.CustKey} ELSE
+//-------------------------------------------------------------
+IF IsNull({PNBomInfo.CustKey}) OR {PNBomInfo.CustKey} = "" THEN
+    {@Batch Product Group}
+ELSE
+    {PNBomInfo.CustKey}
+
+
+//==============================
+// Customer–Product Parameter Key
+//==============================
+Trim({BME_LABEL.Custkey}) & "-" & Trim({BME_LABEL.Itemkey})
+
+
+//==============================
+// Customer Caption 1‑3 (ตรง ๆ)
+//==============================
+{BME_LABEL.CUSCAP1}
+{BME_LABEL.CUSCAP2}
+{BME_LABEL.CUSCAP3}
+
+
+//==============================
+// Customer Item Code (สองจุดอ้างถึง)
+//==============================
+{BME_LABEL.CUSTITEMCODE}
+{BME_LABEL.CUSTITEMCODE}
+
+
+//=============================================================
+// Batch Product Description (+ RSPO MB กรณีพิเศษ)
+//=============================================================
+IF {BME_LABEL.Itemkey} = "TF806B07"
+THEN {@Batch Product Description} & "           " & {@Batch Product 1} & " (RSPO:MB)"
+ELSE
+{@Batch Product Description} & " (" & {@Batch Product 1} & ")"
+
+
+
+//=============================================================
+// NSF‑01 – ตัวอักษร Pack/Blend Code
+//=============================================================
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TB24225A" THEN "S"  ELSE 
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TA23887A" THEN "P"  ELSE
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TB23887A" THEN "B"  ELSE
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TC23887A" THEN "BD" ELSE
+//-------------------------------------------------------------
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TB2497NS" THEN "MP-B-S"  ELSE
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TC2497NS" THEN "MP-BD-S" ELSE
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TC2497NA" THEN "MP-BD-S" ELSE
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TC23887B" THEN "BD"      ELSE
+IF {BME_LABEL.Custkey} = "NSF01" AND {BME_LABEL.Itemkey} = "TB23887B" THEN "B"       ELSE
+//-------------------------------------------------------------
+""
+
+
+//=============================================================
+// Label Color Caption (Thai)
+//=============================================================
+IF {BME_LABEL.Itemkey} = "TB2268AA" THEN "ฉลากสีเขียว" ELSE
+IF {BME_LABEL.Itemkey} = "TA22684A" THEN "ฉลากสีชมพู" ELSE 
+IF {BME_LABEL.Itemkey} = "TB2268MW" THEN "ฉลากสีขาว"  ELSE
+""
+
+
+
+//==============================
+// Customer Territory (ตรง ๆ)
+//==============================
+{ARCUST.Territory_Ky}
+
+
+//=============================================================
+// Pack Unit Caption (KG/…)
+//=============================================================
+//IF {PNBomInfo.FillLevel}=1 THEN "KG/BAG" ELSE {PNBomInfo.FillUOM}&"/"&UpperCase({INMAST.Stockuomcode})
+IF {@Batch Product Group} = "WIP"
+    THEN "KG/" & {BME_LABEL_WIP.PACKUNIT1}
+ELSE
+    "KG/" & {BME_LABEL.PACKUNIT1}
+
+
+//=============================================================
+// FDA / Halal Certificate No. (By Product 1)
+//=============================================================
+IF {@Batch Product 1} = "TF0093B3" THEN "CICT.HL 83 184 746 04 58"  ELSE
+IF {@Batch Product 1} = "TF614EW1" THEN "CICT.HL 83 184 749 04 58"  ELSE 
+IF {@Batch Product 1} = "TS185DM2" THEN "CICT.HL 75 184 1253 04 62" ELSE 
+IF {@Batch Product 1} = "TS184MC1" THEN "CICT.HL 75 184 1251 04 62" ELSE
+IF {@Batch Product 1} = "TB2017GG" THEN "CICT.HL 77 184 1057 05 61" ELSE
+IF {@Batch Product 1} = "TC2017GG" THEN "CICT.HL 77 184 1078 05 61" ELSE
+""
+
+
+//=============================================================
+// Ingredient Declaration (แบ่ง 3 ส่วน 255 char)
+//=============================================================
+Shared Stringvar Batch_Ingredient_Dec1;
+Shared Stringvar Batch_Ingredient_Dec2;
+Shared Stringvar Batch_Ingredient_Dec3;
+
+Batch_Ingredient_Dec1 := Left({BME_LABEL.INGREDLIST1}, 255);
+Batch_Ingredient_Dec2 := Left({BME_LABEL.INGREDLIST2}, 255);
+Batch_Ingredient_Dec3 := Batch_Ingredient_Dec1 & Batch_Ingredient_Dec2;
+
+
+//==============================
+// Ingredient List รวม 1‑3
+//==============================
+{BME_LABEL.INGREDLIST1} & {BME_LABEL.INGREDLIST2} & {BME_LABEL.INGREDLIST3}
+
+
+//==============================
+// Customer Item Code (แสดงเมื่อมี)
+//==============================
+IF {BME_LABEL.CUSTITEMCODE} > "" THEN {BME_LABEL.CUSTITEMCODE} ELSE ""
+
+
+//=============================================================
+// Label Color (สอบถามเมื่อเป็น WIP หรือ Null)
+//=============================================================
+IF {@Batch Product Group} = "WIP"                              THEN "W" ELSE
+IF IsNull({BME_LABEL.LABEL_COLOR}) OR {BME_LABEL.LABEL_COLOR} = "" THEN "?" ELSE
+{BME_LABEL.LABEL_COLOR}
+
+
+//=============================================================
+// Manufacturer Address (ค่า Default / Override)
+//=============================================================
+IF {BME_LABEL.MANUCAP1} = "" THEN
+    "MANUFACTURED BY : Newly Weds Foods (Thailand) Limited" & Chr(13) &
+    "909 Moo 15, Teparak Road, T.Bangsaothong, A.Bangsaothong, Samutprakarn 10570" & Chr(13) &
+    "Thailand Phone (662) 3159000 Fax (662) 3131638-9"
+ELSE
+IF IsNull({BME_LABEL.MANUCAP1}) THEN
+    "MANUFACTURED BY : Newly Weds Foods (Thailand) Limited" & Chr(13) &
+    "909 Moo 15, Teparak Road, T.Bangsaothong, A.Bangsaothong, Samutprakarn 10570" & Chr(13) &
+    "Thailand Phone (662) 3159000 Fax (662) 3131638-9"
+ELSE
+    {BME_LABEL.MANUCAP1}
+
+
+//=============================================================
+// Pack Unit + Size (กรณีพิเศษ TD001CM1)
+//=============================================================
+IF {BME_LABEL.Itemkey} = "TD001CM1"
+THEN "CASE(2BAG)"
+ELSE
+{BME_LABEL.PACKUNIT1} & "(" & ToText({BME_LABEL.PACKSIZE1}, "0.00") & "KG)"
+
+
+//=============================================================
+// Net Weight Caption (ลูกค้า/สินค้า เฉพาะ)
+//=============================================================
+IF {BME_LABEL.Custkey} = "MIN02" THEN "MFG UOM" ELSE 
+IF {BME_LABEL.Custkey} = "CPB01" AND {BME_LABEL.Itemkey} = "TC3999C1" THEN "น้ำหนักสุทธิ" ELSE 
+IF {BME_LABEL.Custkey} = "CPB01" AND {BME_LABEL.Itemkey} = "TS556BB1" THEN "น้ำหนักสุทธิ" ELSE 
+IF {BME_LABEL.Custkey} = "CPB02" AND {BME_LABEL.Itemkey} = "TC3999C1" THEN "น้ำหนักสุทธิ" ELSE 
+IF                                   {BME_LABEL.Itemkey} = "TS034CP1" THEN "น้ำหนักสุทธิ" ELSE 
+"NET WEIGHT"
+
+
+
+//=============================================================
+// Pack Size – ปรับตาม Special Packsize / WIP
+//=============================================================
+//IF {PNBomInfo.FillLevel} = 1 THEN "25" ELSE TOTEXT({PNBomInfo.FillLevel})
+IF {@Label Group} = "02-QC LABEL" THEN 1 ELSE
+//-------------------------------------------------------------
+IF {?Special Packsize} <> 0     THEN {?Special Packsize} ELSE
+IF {@Batch Product Group} = "WIP"
+    THEN {BME_LABEL_WIP.PACKSIZE1}
+ELSE
+    {BME_LABEL.PACKSIZE1}
+
+
+//==============================
+// Running Batch No. (9 หลักขวาสุด)
+//==============================
+Right({PNBomInfo.BatchNo}, 9)
+
+
+//==============================
+// Pallet Label No. (P1, P01 ฯลฯ)
+//==============================
+IF {?Batch-Pallet No.} <= 9
+THEN "P0" & ToText({?Batch-Pallet No.}, "0")
+ELSE "P" & ToText({?Batch-Pallet No.}, "0")
+
+
+//==============================
+// Process Cell ID (ตรง ๆ)
+//==============================
+{PNMAST.ProcessCellId}
+
+
+//=============================================================
+// Process Cell → Line Code แปลงตาม Mapping
+//=============================================================
+IF {PNMAST.ProcessCellId} = "AUSSIE"             THEN "1B"  ELSE
+IF {PNMAST.ProcessCellId} = "YANKEE"             THEN "1B"  ELSE
+IF {PNMAST.ProcessCellId} = "YANKEE-IBC"         THEN "1B"  ELSE
+IF {PNMAST.ProcessCellId} = "TEXAS"              THEN "1BT" ELSE
+//-------------------------------------------------------------
+IF {PNMAST.ProcessCellId} = "FENDER-L"           THEN "2F"  ELSE
+IF {PNMAST.ProcessCellId} = "FENDER-S"           THEN "2F"  ELSE
+IF {PNMAST.ProcessCellId} = "HOBART"             THEN "2F"  ELSE
+IF {PNMAST.ProcessCellId} = "FENDER-R"           THEN "2F"  ELSE
+IF Left({PNMAST.ProcessCellId}, 8) = "FENDER-C"  THEN "2C"  ELSE
+IF {PNMAST.ProcessCellId} = "PACKING"            THEN "2PK" ELSE
+IF {PNMAST.ProcessCellId} = "GIBSON"             THEN "2G"  ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DOUGHLINE"     THEN "3J1" ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-CRACKERMEAL"   THEN "3J2" ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DRYER"         THEN "3J3" ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DOUGHLINE2"    THEN "3J4" ELSE
+IF {PNMAST.ProcessCellId} = "JSBC-DRYER2"        THEN "3J5" ELSE 
+IF {PNMAST.ProcessCellId} = "REPACK"             THEN "4RP" ELSE
+{PNMAST.ProcessCellId}
+
+
+//=============================================================
+// Short Item Key (สำหรับ DT/CH ลักษณะพิเศษ)
+//=============================================================
+IF Left({BME_LABEL.Itemkey}, 2) = "DT" THEN UpperCase(Left({BME_LABEL.Itemkey}, 7)) ELSE 
+IF Left({BME_LABEL.Itemkey}, 2) = "CH" THEN UpperCase(Left({BME_LABEL.Itemkey}, 7)) ELSE
+//-------------------------------------------------------------
+IF {BME_LABEL.Custkey} = "SVT01" AND {BME_LABEL.Itemkey} = "TS382CG2" THEN "Tom yum 130057774"       ELSE
+IF {BME_LABEL.Custkey} = "SVT01" AND {BME_LABEL.Itemkey} = "TS181HY1" THEN "Had Yai 130057780"       ELSE
+IF {BME_LABEL.Custkey} = "SVT01" AND {BME_LABEL.Itemkey} = "TS184CG1" THEN "Spicy Korean 130057782 " ELSE
+IF {BME_LABEL.Custkey} = "SVT01" AND {BME_LABEL.Itemkey} = "TS091CG1" THEN "Wasabi 130058949"        ELSE
+IF {BME_LABEL.Custkey} = "SVT01" AND {BME_LABEL.Itemkey} = "TS034CG1" THEN "Larb 130058950"          ELSE
+//-------------------------------------------------------------
+{PNBomInfo.Assembly_Item_Key}
+
+
+//=============================================================
+// Long Thai/Eng Product Name (เฉพาะ TC410C05)
+//=============================================================
+IF {BME_LABEL.Itemkey} = "TC410C05"
+THEN "เบรดเดอร์ คริสปี้ / Breader,Crispy (TC410C05)"
+ELSE ""
+ 
+
+//=============================================================
+// Assembly Item Key (ซ้ำอีกครั้ง)
+//=============================================================
+IF Left({BME_LABEL.Itemkey}, 2) = "DT" THEN UpperCase(Left({BME_LABEL.Itemkey}, 7)) ELSE 
+IF Left({BME_LABEL.Itemkey}, 2) = "CH" THEN UpperCase(Left({BME_LABEL.Itemkey}, 7)) ELSE 
+{PNBomInfo.Assembly_Item_Key}
+
+
+//=============================================================
+// Item Caption (ใช้ INMAST.Desc1 เมื่อตัวแปรว่าง)
+//=============================================================
+IF IsNull({BME_LABEL.ITEMCAP}) OR {BME_LABEL.ITEMCAP} = ""
+THEN {INMAST.Desc1}
+ELSE {BME_LABEL.ITEMCAP}
+
+
+//=============================================================
+// FDA Number (เฉพาะ TC410C05)
+//=============================================================
+IF {BME_LABEL.Itemkey} = "TC410C05"
+THEN "11-1-28633-2-0028"
+ELSE ""
+
+
+//=============================================================
+// FG / WIP Class Code
+//=============================================================
+IF {PNBomInfo.CustKey} = "INN01" THEN "FG" ELSE
+IF {PNBomInfo.CustKey} = "GOF01" THEN "FG" ELSE
+IF {PNBomInfo.CustKey} = "SVT01" THEN "FG" ELSE
+//-------------------------------------------------------------
+IF Left({INLOC.Inclasskey}, 2) = "WI"
+THEN "WIP"
+ELSE Left({INLOC.Inclasskey}, 2)
+
+
+//==============================
+// Remark 1 (ตรง ๆ)
+//==============================
+{BME_LABEL.REMARK1}
+
+
+//==============================
+// Shelf‑life (Day) ตรง ๆ
+//==============================
+{BME_LABEL.SHELFLIFE_DAY}
+
+
+//==============================
+// Production Date (Param.)
+//==============================
+{?Production Date}
+
+
+//==============================
+// Production Date Caption (LOT CODE)
+//==============================
+IF {BME_LABEL.PRODATECAP} > ""     THEN UpperCase({BME_LABEL.PRODATECAP}) ELSE
+IF {BME_LABEL.PRODATECAP} = ""     THEN "LOT CODE"                         ELSE
+IF IsNull({BME_LABEL.PRODATECAP})  THEN "LOT CODE"                         ELSE
+"LOT CODE"
+
+
+
+//=============================================================
+// Bag Running Number (QC/ปกติ)
+//=============================================================
+Numbervar BAGRUN;
+BAGRUN := ({GET_BAGNUMBER;1.BagNo} + ({@Batch Bag Start} - 1));
+
+IF {GET_BAGNUMBER;1.BagNo} <= {?@Total_Label_Print} AND BAGRUN <= 9
+    THEN {@Batch Unit Running} & "0" & ToText(BAGRUN, "0")
+ELSE 
+//-------------------------------------------------------------   (> Total & F/T/Q)
+// > Total_Print  &  Unit = F
+IF {GET_BAGNUMBER;1.BagNo}  > {?@Total_Label_Print} AND {@Batch Unit Running} = "F"
+    THEN {@Batch Unit Running} & "0" & ToText((BAGRUN / 1000), "0")
+ELSE
+// > Total_Print  &  Unit = T
+IF {GET_BAGNUMBER;1.BagNo}  > {?@Total_Label_Print} AND {@Batch Unit Running} = "T"
+    THEN {@Batch Unit Running} & "0" & ToText((BAGRUN / 2000), "0")
+ELSE
+// > Total_Print  &  Unit = Q
+IF {GET_BAGNUMBER;1.BagNo}  > {?@Total_Label_Print} AND {@Batch Unit Running} = "Q"
+    THEN {@Batch Unit Running} & "0" & ToText((BAGRUN / 10000), "0")
+ELSE
+//-------------------------------------------------------------
+{@Batch Unit Running} & ToText(BAGRUN, "0")
+
+
+//==============================
+// Small‑Pack Information (ตรง ๆ)
+//==============================
+{BME_LABEL.SMALLPACKINFO}
+
+
+//==============================
+// SO Number (ตรง ๆ)
+//==============================
+{PNBomInfo.SONumber}
+
+
+//==============================
+// Storage Caption 1 (ตรง ๆ)
+//==============================
+{BME_LABEL.STORECAP1} 
+
+
+//=============================================================
+// Label Type → Unit Running (B/C/F/T/Q)
+//=============================================================
+IF Left({GET_BAGNUMBER;1.LabelType}, 2) In ["01"] AND {BME_LABEL.PACKUNIT1} = "BAG" THEN "B" ELSE
+IF Left({GET_BAGNUMBER;1.LabelType}, 2) In ["01"] AND {BME_LABEL.PACKUNIT1} = "CTN" THEN "C" ELSE
+IF Left({GET_BAGNUMBER;1.LabelType}, 2) In ["02"]                                   THEN "F" ELSE
+IF Left({GET_BAGNUMBER;1.LabelType}, 2) In ["03"]                                   THEN "T" ELSE
+IF Left({GET_BAGNUMBER;1.LabelType}, 2) In ["04"]                                   THEN "Q" ELSE
+//-------------------------------------------------------------
+IF {@Batch Product Group} = "WIP" AND {BME_LABEL_WIP.PACKUNIT1} = "BAG" THEN "B" ELSE
+IF {BME_LABEL.PACKUNIT1} = "BAG"                                         THEN "B" ELSE 
+IF {BME_LABEL.PACKUNIT1} = "CTN"                                         THEN "C" ELSE 
+//-------------------------------------------------------------
+"C"
+
+
+
+//==============================
+// Itemkey TC410C05 – Usage Caption
+//==============================
+IF {BME_LABEL.Itemkey} = "TC410C05" THEN "ใช้สำหรับคลุกไก่ทอด" ELSE ""
+
+
+//=============================================================
+// CFR01 Specific Barcode Text
+//=============================================================
+IF {BME_LABEL.Custkey} = "CFR01" AND {BME_LABEL.Itemkey} = "TS024CF1" THEN "Barcode : 0000047933361" ELSE
+IF {BME_LABEL.Custkey} = "CFR01" AND {BME_LABEL.Itemkey} = "TS132CF1" THEN "Barcode : 0000047933347" ELSE
+IF {BME_LABEL.Custkey} = "CFR01" AND {BME_LABEL.Itemkey} = "TS374CF1" THEN "Barcode : 0000047933361" ELSE 
+//-------------------------------------------------------------
+IF {BME_LABEL.Custkey} = "CFR01" AND {BME_LABEL.Itemkey} = "TS181MM1" THEN "Barcode : 0214607000008" ELSE
+IF {BME_LABEL.Custkey} = "CFR01" AND {BME_LABEL.Itemkey} = "TS910M01" THEN "Barcode : 0214719000002" ELSE
+IF {BME_LABEL.Custkey} = "CFR01" AND {BME_LABEL.Itemkey} = "TS129CF1" THEN "Barcode : 0214873000009" ELSE 
+//-------------------------------------------------------------
+""
+
+
+//==============================
+// Customs / Import ข้อมูล (แสดงเมื่อมี)
+//==============================
+IF IsNull({BME_LABEL.CUSTOMS_TEXT1}) OR {BME_LABEL.CUSTOMS_TEXT1} = "" THEN "" ELSE {BME_LABEL.CUSTOMS_TEXT1}
+IF IsNull({BME_LABEL.CUSTOMS_TEXT2}) OR {BME_LABEL.CUSTOMS_TEXT2} = "" THEN "" ELSE {BME_LABEL.CUSTOMS_TEXT2}
+IF IsNull({BME_LABEL.IMPORTER ADDRESS}) OR {BME_LABEL.IMPORTER ADDRESS} = "" THEN "" ELSE {BME_LABEL.IMPORTER ADDRESS}
+IF IsNull({BME_LABEL.IMPORTED_BY}) OR {BME_LABEL.IMPORTED_BY} = "" THEN "" ELSE {BME_LABEL.IMPORTED_BY}
+IF IsNull({BME_LABEL.IMPORTER_CONTACT}) OR {BME_LABEL.IMPORTER_CONTACT} = "" THEN "" ELSE {BME_LABEL.IMPORTER_CONTACT}
+
+
+//=============================================================
+// ตัวอย่าง Label Demo Caption (ตาม Label Group/Type)
+//=============================================================
+IF {@Label Group}              = "01-Product"           THEN ""                                             ELSE
+IF {@Label Group}              = "02-Formulation Sheet" THEN "ตัวอย่างฉลากสำหรับติดใบสูตร"                 ELSE
+IF {@Label Group}              = "03-Pallet Tag"        THEN "ตัวอย่างฉลากสำหรับติด Pallet Tag"           ELSE
+IF {GET_BAGNUMBER;1.LabelType} = "04-QC Sample 1"       THEN "ตัวอย่าง  QC ถุงที่ 1 : ช่วงต้น"             ELSE
+IF {GET_BAGNUMBER;1.LabelType} = "04-QC Sample 2"       THEN "ตัวอย่าง  QC ถุงที่ 2 : ช่วงกลาง"            ELSE
+IF {GET_BAGNUMBER;1.LabelType} = "04-QC Sample 3"       THEN "ตัวอย่าง  QC ถุงที่ 3 : ช่วงท้าย"            ELSE
+""
+
+
+//=============================================================
+// Label Type – ชื่อเต็ม (QC/Bag/…)
+//=============================================================
+IF Left({GET_BAGNUMBER;1.LabelType}, 2) = "04"
+THEN "04-QC Sample"
+ELSE {GET_BAGNUMBER;1.LabelType}
+
+
+//=============================================================
+// Label Instruction (แสดงเมื่อมี)
+//=============================================================
+IF IsNull({BME_LABEL.LABEL INSTRUCTION}) = FALSE OR {BME_LABEL.LABEL INSTRUCTION} > ""
+THEN "วิธีการติดฉลาก : " & {BME_LABEL.LABEL INSTRUCTION}
+ELSE ""
+
+
+//==============================
+// Print Date‑Time (DDMMYY HH:MMtt)
+//==============================
+"" & ToText(PrintDate, "ddMMyy") & " " & ToText(PrintTime, "hh:mmtt")
+
+
+//==============================
+// Customer–Product (Param) สั้น ๆ
+//==============================
+{?Customer} & "-" & ({?Product})[1]
+
+
+//=============================================================
+// QC Sample – Label Prefix
+//=============================================================
+IF {GET_BAGNUMBER;1.BagNo} > {?@Total_Label_Print}
+THEN "QC SAMPLE-" & ToText(((( {GET_BAGNUMBER;1.BagNo} / 100) - ({?@Total_Label_Print} / 100)) + 1) - {?@Total_Label_Print}, "00")
+ELSE ""

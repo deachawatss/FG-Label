@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using FgLabel.Shared.Models;
+using FgLabel.Api.Models;
 
 namespace FgLabel.Api.Services
 {
@@ -8,5 +8,6 @@ namespace FgLabel.Api.Services
     {
         Task<BatchInfoDto> GetBatchInfo(int batchId);
         Task<IEnumerable<BatchDto>> GetCurrentBatchesAsync();
+        Task<IEnumerable<LabelRowDto>> GetBatchData(string batchNo, string? bagNo = null);
     }
 }

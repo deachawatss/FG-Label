@@ -26,16 +26,58 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.Caching.Distributed;
 using System.Data;
-using FgLabel.Shared.Models;
-using FgLabel.Shared.Services;
-using FgLabel.Shared.Utilities;
+using FgLabel.Api.Models;
+using FgLabel.Api.Utilities;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
 using FgLabel.Api.Repositories;
-using FgLabel.Api.Models;
-using SharedModels = FgLabel.Shared.Models;
+using Microsoft.Extensions.Hosting;
+using FgLabel.Api.Integration.LabelRenderers;
 
 namespace FgLabel.Api;
+
+// Define LabelTemplate class for template records
+public record LabelTemplate
+{
+    public int TemplateID { get; set; }
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+    public string? Engine { get; set; }
+    public string? PaperSize { get; set; }
+    public string? Orientation { get; set; }
+    public string? Content { get; set; }
+    public string? ProductKey { get; set; }
+    public string? CustomerKey { get; set; }
+    public decimal Version { get; set; } = 1;
+    public bool Active { get; set; } = true;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    public List<LabelTemplateComponent> Components { get; set; } = new List<LabelTemplateComponent>();
+    
+    // สำหรับรองรับการใช้งาน with pattern
+    public LabelTemplate With(List<LabelTemplateComponent> components)
+    {
+        return this with { Components = components };
+    }
+}
+
+// Define LabelTemplateComponent class for template components
+public class LabelTemplateComponent
+{
+    public int ComponentID { get; set; }
+    public int TemplateID { get; set; }
+    public string? ComponentType { get; set; }
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int W { get; set; }
+    public int H { get; set; }
+    public string? FontName { get; set; }
+    public int? FontSize { get; set; }
+    public string? StaticText { get; set; }
+    public string? Placeholder { get; set; }
+    public string? BarcodeFormat { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
 
 // Define TemplateRequest class for template update operations
 public class TemplateRequest
@@ -79,6 +121,84 @@ public class LabelTemplateDto
     public bool Active { get; set; } = true;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+}
+
+// เพิ่ม class LabelRendererFactory สำหรับการ render ฉลาก
+public class LabelRendererFactory
+{
+    private readonly ILogger<LabelRendererFactory> _logger;
+    private readonly IConfiguration _configuration;
+    
+    public LabelRendererFactory(ILogger<LabelRendererFactory> logger, IConfiguration configuration)
+    {
+        _logger = logger;
+        _configuration = configuration;
+    }
+    
+    public ILabelRenderer CreateRenderer(string engine)
+    {
+        _logger.LogInformation("Creating renderer for engine: {Engine}", engine);
+        
+        // สร้าง renderer ตามประเภทของ engine ที่กำหนด
+        switch (engine?.ToLower())
+        {
+            case "html":
+                return new HtmlLabelRenderer(_logger);
+            case "canvas":
+                return new CanvasLabelRenderer(_logger);
+            default:
+                _logger.LogWarning("Unknown engine type: {Engine}, falling back to HTML renderer", engine);
+                return new HtmlLabelRenderer(_logger);
+        }
+    }
+}
+
+// เพิ่ม interface สำหรับ renderer
+public interface ILabelRenderer
+{
+    Task<byte[]> RenderLabelAsync(string template, object data);
+    string GetContentType();
+}
+
+// เพิ่ม implementation สำหรับ HTML renderer
+public class HtmlLabelRenderer : ILabelRenderer
+{
+    private readonly ILogger _logger;
+    
+    public HtmlLabelRenderer(ILogger logger)
+    {
+        _logger = logger;
+    }
+    
+    public async Task<byte[]> RenderLabelAsync(string template, object data)
+    {
+        _logger.LogInformation("Rendering HTML label");
+        // ในที่นี้จะ return เป็น byte array ว่างๆ เพื่อให้โค้ดทำงานได้
+        // ในการใช้งานจริงจะต้องมีการ implement การแปลง HTML เป็น PDF หรือรูปแบบอื่นๆ
+        return await Task.FromResult(Array.Empty<byte>());
+    }
+    
+    public string GetContentType() => "application/pdf";
+}
+
+// เพิ่ม implementation สำหรับ Canvas renderer
+public class CanvasLabelRenderer : ILabelRenderer
+{
+    private readonly ILogger _logger;
+    
+    public CanvasLabelRenderer(ILogger logger)
+    {
+        _logger = logger;
+    }
+    
+    public async Task<byte[]> RenderLabelAsync(string template, object data)
+    {
+        _logger.LogInformation("Rendering Canvas label");
+        // เช่นเดียวกัน จะ return เป็น byte array ว่างๆ
+        return await Task.FromResult(Array.Empty<byte>());
+    }
+    
+    public string GetContentType() => "application/pdf";
 }
 
 public class Program
@@ -272,6 +392,9 @@ public class Program
 
         Console.WriteLine($"[JWT] KeyLength={_jwtKey.Length}, Issuer={_jwtIssuer}");
 
+        // เพื่อให้เป็น async อย่างแท้จริง
+        await Task.Yield();
+
         /* ------------------------------------------------------------------ */
         /* 2) Service & Infrastructure                                        */
         /* ------------------------------------------------------------------ */
@@ -421,7 +544,7 @@ public class Program
         builder.Services.AddScoped<ILabelRepository, LabelRepository>();
         builder.Services.AddScoped<ILabelTemplateRepository>(sp => 
             new LabelTemplateRepository(
-                sp.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection")!,
+                new SqlConnection(sp.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection")!),
                 sp.GetRequiredService<ILogger<LabelTemplateRepository>>()
             ));
 
@@ -442,6 +565,24 @@ public class Program
             options.Password = ldapPassword;
         });
         builder.Services.AddSingleton<ILdapService, LdapService>();
+
+        // ลงทะเบียนบริการสำหรับการพิมพ์
+        builder.Services.AddScoped<IPrintService, PrintService>();
+        builder.Services.AddSingleton<FgLabel.Api.Integration.LabelRenderers.ZplRenderer>();
+        builder.Services.AddSingleton<FgLabel.Api.Integration.LabelRenderers.TsplRenderer>();
+        
+        // ลงทะเบียน ILabelRenderer ทั้งหมด
+        builder.Services.AddSingleton<IEnumerable<FgLabel.Api.Integration.LabelRenderers.ILabelRenderer>>(sp => 
+        {
+            return new List<FgLabel.Api.Integration.LabelRenderers.ILabelRenderer>
+            {
+                sp.GetRequiredService<FgLabel.Api.Integration.LabelRenderers.ZplRenderer>(),
+                sp.GetRequiredService<FgLabel.Api.Integration.LabelRenderers.TsplRenderer>()
+            };
+        });
+        
+        // ลงทะเบียน LabelRendererFactory
+        builder.Services.AddSingleton<FgLabel.Api.Integration.LabelRenderers.LabelRendererFactory>();
 
         /* ------------------------------------------------------------------ */
         Console.WriteLine("[FgLabel] Before builder.Build()");
@@ -535,7 +676,7 @@ public class Program
         // ------------------------------------------------------------------ //
 
         /* ---------- 4.1  POST /api/auth/login --------------------------------- */
-        app.MapPost("/api/auth/login", async (LoginRequest login, ILogger<Program> log) =>
+        app.MapPost("/api/auth/login", async (FgLabel.Api.Models.LoginRequest login, ILogger<Program> log) =>
         {
             // Mask password in logs
             log.LogInformation("/api/auth/login username: {Username}", login.username);
@@ -585,63 +726,168 @@ public class Program
         }).RequireAuthorization();
 
         /* ---------- 4.2.1  GET /api/batch/{batchNo} ----------------------- */
-        app.MapGet("/api/batch/{batchNo}", async (string batchNo, [FromServices] IBatchRepository batchRepo, ILogger<Program> logger) =>
+        app.MapGet("/api/batch/{batchNo}", async (string batchNo, [FromServices] IDbConnection db, ILogger<Program> logger) =>
         {
             try
             {
-                Console.WriteLine($"[FgLabel] Getting batch info for BatchNo: {batchNo}");
-                var batchInfo = await batchRepo.GetBatchInfoAsync(batchNo);
+                logger.LogInformation("Getting batch info for BatchNo: {BatchNo}", batchNo);
+                
+                // Query batch information directly from the database
+                var sql = "SELECT * FROM FgL.vw_Label_PrintSummary WHERE BatchNo = @BatchNo";
+                var batchInfo = await db.QueryFirstOrDefaultAsync(sql, new { BatchNo = batchNo });
+                
                 if (batchInfo == null)
                 {
-                    Console.WriteLine($"[FgLabel] Batch not found: {batchNo}");
+                    logger.LogWarning("Batch not found: {BatchNo}", batchNo);
                     return Results.NotFound();
                 }
-                Console.WriteLine($"[FgLabel] Successfully retrieved batch info for BatchNo: {batchNo}");
+                
+                logger.LogInformation("Successfully retrieved batch info for BatchNo: {BatchNo}", batchNo);
                 return Results.Ok(batchInfo);
             }
             catch (SqlException ex)
             {
-                Console.WriteLine($"[FgLabel] SQL Error getting batch info for BatchNo: {batchNo}");
-                Console.WriteLine($"[FgLabel] SQL Error Number: {ex.Number}");
-                Console.WriteLine($"[FgLabel] SQL Error Message: {ex.Message}");
+                logger.LogError(ex, "SQL Error getting batch info for BatchNo: {BatchNo}, Error: {Message}", batchNo, ex.Message);
                 return Results.Problem($"Database error: {ex.Message}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[FgLabel] Error getting batch info for BatchNo: {batchNo}");
-                Console.WriteLine($"[FgLabel] Error Type: {ex.GetType().Name}");
-                Console.WriteLine($"[FgLabel] Error Message: {ex.Message}");
+                logger.LogError(ex, "Error getting batch info for BatchNo: {BatchNo}, Error: {Message}", batchNo, ex.Message);
                 return Results.Problem($"Error getting batch info: {ex.Message}");
             }
         }).RequireAuthorization();
 
         /* ---------- 4.2.2  GET /api/batches/labelview ----------------------- */
-        app.MapGet("/api/batches/labelview", async ([FromQuery] string? batchNo, [FromQuery] string? lotCode, [FromServices] IDbConnection db, ILogger<Program> logger) =>
+        app.MapGet("/api/batches/labelview", async ([FromQuery] string? batchNo, [FromQuery] string? bagNo, [FromServices] IDbConnection db, ILogger<Program> logger, [FromServices] ITemplateService templateService) =>
         {
             try
             {
-                logger.LogInformation("Getting label data with parameters: BatchNo={BatchNo}, LotCode={LotCode}", batchNo, lotCode);
+                logger.LogInformation("Getting label data with parameters: BatchNo={BatchNo}, BagNo={BagNo}", batchNo, bagNo);
                 
-                string sql = "SELECT * FROM FgL.vw_Label_PrintData WHERE 1=1";
-                var parameters = new DynamicParameters();
-                
-                if (!string.IsNullOrEmpty(batchNo))
+                // ถ้าไม่มีพารามิเตอร์ให้จำกัดจำนวนเรคอร์ดที่ส่งกลับเพื่อป้องกันความผิดพลาด
+                if (string.IsNullOrEmpty(batchNo))
                 {
-                    sql += " AND BatchNo = @BatchNo";
-                    parameters.Add("BatchNo", batchNo);
+                    // ส่งกลับเฉพาะ 20 รายการล่าสุดเพื่อป้องกัน slow queries
+                    string sql = @"
+                        SELECT TOP (20) * 
+                        FROM FgL.vw_Label_PrintSummary WITH (NOLOCK)
+                        WHERE BatchNo IS NOT NULL AND BatchNo NOT LIKE '%.%'  -- กรองบัตชที่มีจุด
+                        AND BatchTicketDate > DATEADD(MONTH, -3, GETDATE()) -- เพิ่มเงื่อนไขกรองเฉพาะรายการ 3 เดือนล่าสุดเพื่อความเร็ว
+                        ORDER BY BatchTicketDate DESC";
+                        
+                    try
+                    {
+                        // กำหนด timeout ที่เหมาะสม (30 วินาที)
+                        var cmdDef = new CommandDefinition(
+                            sql,
+                            new { },  // ไม่มีพารามิเตอร์
+                            commandTimeout: 30 // 30 วินาที
+                        );
+                        
+                        var result = await db.QueryAsync<FgLabel.Api.Models.LabelRowDto>(cmdDef);
+                        logger.LogInformation("Successfully retrieved limited label data. Count: {Count}", result.Count());
+                        return Results.Ok(result);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error in default query: {Message}", ex.Message);
+                        // ส่งกลับอาร์เรย์ว่างในกรณีเกิดข้อผิดพลาด
+                        return Results.Ok(Array.Empty<object>());
+                    }
                 }
                 
-                if (!string.IsNullOrEmpty(lotCode))
+                // ตรวจสอบรูปแบบของ batchNo
+                if (batchNo.Contains(".") || batchNo.Contains(" ") || !batchNo.All(c => char.IsLetterOrDigit(c)))
                 {
-                    sql += " AND LotCode = @LotCode";
-                    parameters.Add("LotCode", lotCode);
+                    logger.LogWarning("Invalid BatchNo format: {BatchNo}", batchNo);
+                    return Results.BadRequest(new { error = "Invalid BatchNo format" });
                 }
                 
-                sql += " ORDER BY BatchNo, BagSequence";
-                
-                var result = await db.QueryAsync(sql, parameters);
-                logger.LogInformation("Successfully retrieved label data. Count: {Count}", result.Count());
-                return Results.Ok(result);
+                try
+                {
+                    // เรียกใช้ stored procedure แทนการ query view โดยตรง
+                    string storedProc = "FgL.usp_GetLabelDataByBatchNo";
+                    
+                    // สร้าง parameters สำหรับ stored procedure
+                    var parameters = new DynamicParameters();
+                    parameters.Add("@BatchNo", batchNo);
+                    
+                    // ถ้ามี bagNo ให้ส่งไปด้วย
+                    if (!string.IsNullOrEmpty(bagNo))
+                    {
+                        parameters.Add("@BagNo", bagNo);
+                    }
+                    
+                    // กำหนด timeout ที่เหมาะสม (30 วินาที)
+                    var cmdDef = new CommandDefinition(
+                        storedProc,
+                        parameters,
+                        commandType: CommandType.StoredProcedure,
+                        commandTimeout: 30 // 30 วินาที
+                    );
+                    
+                    var resultWithParams = await db.QueryAsync<FgLabel.Api.Models.LabelRowDto>(cmdDef);
+                    
+                    // ตรวจสอบว่ามีผลลัพธ์หรือไม่
+                    if (resultWithParams.Any())
+                    {
+                        // Auto-create template ถ้าไม่มี
+                        var firstRow = resultWithParams.First();
+                        if (firstRow != null && 
+                            firstRow.TemplateID == null && 
+                            !string.IsNullOrEmpty(firstRow.ItemKey))
+                        {
+                            var productKey = firstRow.ItemKey;
+                            var customerKey = firstRow.CustKey;
+                            
+                            try
+                            {
+                                // Auto-create template
+                                var request = new FgLabel.Api.Models.AutoCreateRequest 
+                                { 
+                                    BatchNo = batchNo,
+                                    ProductKey = productKey,
+                                    CustomerKey = customerKey ?? string.Empty  // ป้องกัน null assignment
+                                };
+                                var templateId = await templateService.AutoCreateTemplateAsync(request);
+                                
+                                if (templateId > 0)
+                                {
+                                    // เพิ่มข้อมูล template ให้กับทุก row ใน resultWithParams
+                                    var template = await db.QueryFirstOrDefaultAsync<LabelTemplateDto>(
+                                        "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @Id", 
+                                        new { Id = templateId });
+                                        
+                                    if (template != null)
+                                    {
+                                        // ทำการ clone resultWithParams เพื่อแก้ไขข้อมูล template
+                                        var updatedResult = resultWithParams.Select(row => {
+                                            var newRow = row;
+                                            newRow.TemplateID = template.TemplateID;
+                                            newRow.TemplateName = template.Name;
+                                            newRow.TemplateUpdatedAt = template.UpdatedAt;
+                                            return newRow;
+                                        }).ToList();
+                                        
+                                        resultWithParams = updatedResult;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogError(ex, "Error auto-creating template: {Message}", ex.Message);
+                            }
+                        }
+                    }
+                    
+                    logger.LogInformation("Successfully retrieved label data with params. Count: {Count}", resultWithParams.Count());
+                    return Results.Ok(resultWithParams);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error in stored procedure query: {Message}", ex.Message);
+                    return Results.Ok(Array.Empty<object>());
+                }
             }
             catch (Exception ex)
             {
@@ -656,7 +902,7 @@ public class Program
 
         /* ---------- 4.3  POST /api/templates/auto-create ------------------- */
         app.MapPost("/api/templates/auto-create", async (
-            AutoCreateRequest request,
+            FgLabel.Api.Models.AutoCreateRequest request,
             [FromServices] ITemplateService templateService) =>
         {
             var templateId = await templateService.AutoCreateTemplateAsync(request);
@@ -665,61 +911,127 @@ public class Program
 
         /* ---------- 4.4  POST /api/jobs ----------------------------------- */
         app.MapPost("/api/jobs", async (
-                   JobRequest body,
-                   ITemplateService templateService,
-                   IHubContext<Hubs.JobHub> hub) =>
+               FgLabel.Api.Models.JobRequest body,
+               ITemplateService templateService,
+               IDbConnection db,
+               IPrintService printService,
+               IHubContext<Hubs.JobHub> hub,
+               ILogger<Program> logger) =>
         {
-            using var conn = new SqlConnection(sqlConn);
-
-            // Get or create template
-            var templateId = await templateService.CreateOrGetTemplateAsync(body.BatchNo);
-
-            var jobId = await conn.ExecuteScalarAsync<long>(@"
-                    INSERT INTO FgL.LabelPrintJob (BatchNo,TemplateID,Copies,Status,PrintedAt)
+            try
+            {
+                // ตรวจสอบพารามิเตอร์ที่จำเป็น
+                if (string.IsNullOrEmpty(body.BatchNo))
+                {
+                    return Results.BadRequest(new { error = "BatchNo is required" });
+                }
+                
+                // กำหนดค่าเริ่มต้นหากไม่ได้ระบุ
+                if (body.Copies < 1)
+                {
+                    body.Copies = 1; // ถ้าไม่ระบุจำนวนที่จะพิมพ์ ให้ค่าเริ่มต้นเป็น 1
+                }
+                
+                logger.LogInformation("Creating print job for batch {BatchNo}, copies {Copies}", 
+                    body.BatchNo, body.Copies);
+                
+                // รับหรือสร้าง template ถ้ายังไม่มี TemplateId
+                int templateId = body.TemplateId ?? 0;
+                if (templateId <= 0)
+                {
+                    // ใช้ mapping service เพื่อหา template ที่เหมาะสม
+                    templateId = await templateService.GetMappingForBatchAsync(body.BatchNo);
+                    
+                    // ถ้ายังไม่มี template ให้สร้างอัตโนมัติ
+                    if (templateId <= 0)
+                    {
+                        logger.LogInformation("No template found for batch {BatchNo}, creating one automatically", body.BatchNo);
+                        var request = new FgLabel.Api.Models.AutoCreateRequest
+                        {
+                            BatchNo = body.BatchNo,
+                            ProductKey = body.ProductKey,
+                            CustomerKey = body.CustomerKey
+                        };
+                        templateId = await templateService.AutoCreateTemplateAsync(request);
+                        
+                        if (templateId <= 0)
+                        {
+                            logger.LogWarning("Failed to create template for batch {BatchNo}", body.BatchNo);
+                            return Results.BadRequest(new { error = "Unable to create template for batch" });
+                        }
+                    }
+                }
+                
+                // บันทึกงานพิมพ์ลงในฐานข้อมูล - ใช้พารามิเตอร์จาก JobRequest
+                var sql = @"
+                    INSERT INTO FgL.LabelPrintJob (BatchNo, TemplateID, PrinterID, Copies, Status, PrintedAt)
                     OUTPUT INSERTED.JobID
-                    VALUES (@BatchNo,@TemplateID,@Copies,'queued',SYSUTCDATETIME())",
-                new { body.BatchNo, TemplateID = templateId, body.Copies });
-
-            // ----- สร้าง factory และ connection ที่นี่ ----- //
-            var rabbitHost = app.Configuration["RabbitMQ__HostName"] ?? "localhost";
-            var rabbitUser = app.Configuration["RabbitMQ__UserName"] ?? "guest";
-            var rabbitPass = app.Configuration["RabbitMQ__Password"] ?? "guest";
-            var factory = new ConnectionFactory
+                    VALUES (@BatchNo, @TemplateID, @PrinterID, @Copies, @Status, SYSUTCDATETIME())";
+                
+                var jobId = await db.ExecuteScalarAsync<long>(sql, new { 
+                    body.BatchNo, 
+                    TemplateID = templateId,
+                    PrinterID = body.PrinterId,
+                    body.Copies,
+                    Status = body.Status ?? "queued"
+                });
+                
+                logger.LogInformation("Created print job {JobId} for batch {BatchNo}", jobId, body.BatchNo);
+                
+                // ส่งงานไปที่ RabbitMQ
+                var factory = new ConnectionFactory
+                {
+                    HostName = Environment.GetEnvironmentVariable("RABBITMQ__HostName") ?? "localhost",
+                    UserName = Environment.GetEnvironmentVariable("RABBITMQ__UserName") ?? "guest",
+                    Password = Environment.GetEnvironmentVariable("RABBITMQ__Password") ?? "guest"
+                };
+                
+                using var mqConn = factory.CreateConnection();
+                using var ch = mqConn.CreateModel();
+                ch.QueueDeclare("print-jobs", true, false, false);
+                
+                // สร้าง message ที่มีรายละเอียดตามที่ frontend ต้องการ
+                var printMessage = new
+                {
+                    jobId,
+                    body.BatchNo,
+                    templateId,
+                    body.Copies,
+                    body.PrinterId,
+                    startBag = body.StartBag ?? 1,
+                    endBag = body.EndBag ?? body.StartBag ?? 1,
+                    body.QcSample,
+                    body.FormSheet,
+                    body.PalletTag,
+                    body.ProductKey,
+                    body.CustomerKey,
+                    quantity = body.Quantity ?? body.Copies
+                };
+                
+                var msgBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(printMessage));
+                
+                ch.BasicPublish("", "print-jobs", null, msgBytes);
+                logger.LogInformation("Published print job {JobId} to RabbitMQ", jobId);
+                
+                // แจ้งเตือนผ่าน SignalR
+                await hub.Clients.All.SendAsync("job:update", new { jobId, status = body.Status ?? "queued" });
+                
+                return Results.Ok(new { jobId });
+            }
+            catch (Exception ex)
             {
-                HostName = rabbitHost,
-                UserName = rabbitUser,
-                Password = rabbitPass
-            };
-            using var mqConn = factory.CreateConnection();
-            using var ch = mqConn.CreateModel();
-            ch.QueueDeclare("print-jobs", true, false, false);
-            var msgBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
-            {
-                jobId,
-                body.BatchNo,
-                templateId,
-                body.Copies
-            }));
-            ch.BasicPublish("", "print-jobs", null, msgBytes);
-
-            // ----- SignalR push ------------------------------------------ //
-            await hub.Clients.All.SendAsync("job:update", new { jobId, status = "queued" });
-
-            return Results.Ok(new { jobId });
+                logger.LogError(ex, "Error creating print job: {Message}", ex.Message);
+                return Results.Problem(
+                    title: "Error creating print job",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
+            }
         }).RequireAuthorization();
 
         /* ---------- 4.5  SignalR hub route ------------------------------- */
-        app.MapGet("/api/labels/{batchNo}", async (ILabelRepository repo, string batchNo)
-            => await repo.GetAsync(batchNo) is { } dto 
-                ? Results.Ok(dto) 
-                : Results.NotFound());
-
-        app.MapPut("/api/labels/{batchNo}", async (ILabelRepository repo, string batchNo, UpdateLabelRequest req)
-            => await repo.UpdateAsync(batchNo, req) 
-                ? Results.Ok(await repo.GetAsync(batchNo))
-                : Results.NotFound());
-
-        app.MapHub<Hubs.JobHub>("/hubs/jobs").RequireAuthorization();
+        Console.WriteLine("[FgLabel] Mapping SignalR hub to /hubs/job");
+        app.MapHub<Hubs.JobHub>("/hubs/job").RequireAuthorization();
 
         /* ---------- 4.6  GET /api/me --------------------------------------- */
         app.MapGet("/api/me", (ClaimsPrincipal user) =>
@@ -740,18 +1052,35 @@ public class Program
                 var templates = (await templateRepo.GetAllActiveTemplates()).ToList();
                 
                 // สร้าง list ใหม่เพื่อเก็บ templates พร้อม components
-                var result = new List<SharedModels.LabelTemplate>();
+                var result = new List<LabelTemplate>();
                 
                 // ดึงข้อมูล components สำหรับแต่ละ template
                 foreach (var tpl in templates)
                 {
-                    var components = await db.QueryAsync<SharedModels.LabelTemplateComponent>(
+                    var components = await db.QueryAsync<LabelTemplateComponent>(
                         "SELECT * FROM FgL.LabelTemplateComponent WHERE TemplateID = @Id", 
                         new { Id = tpl.TemplateID });
                     
-                    // สร้าง template ใหม่พร้อม components แล้วเพิ่มเข้า list ผลลัพธ์
-                    var updatedTemplate = tpl with { Components = components.ToList() };
-                    result.Add(updatedTemplate);
+                    // สร้าง LabelTemplate ใหม่จาก tpl
+                    var newTemplate = new LabelTemplate
+                    {
+                        TemplateID = tpl.TemplateID,
+                        Name = tpl.Name,
+                        Description = tpl.Description,
+                        Engine = tpl.Engine,
+                        PaperSize = tpl.PaperSize,
+                        Orientation = tpl.Orientation,
+                        Content = tpl.Content,
+                        ProductKey = tpl.ProductKey,
+                        CustomerKey = tpl.CustomerKey,
+                        Version = tpl.Version,
+                        Active = tpl.Active,
+                        CreatedAt = tpl.CreatedAt,
+                        UpdatedAt = tpl.UpdatedAt,
+                        Components = components.ToList()
+                    };
+                    
+                    result.Add(newTemplate);
                 }
                 
                 logger.LogInformation("Successfully retrieved {Count} templates", result.Count);
@@ -776,7 +1105,7 @@ public class Program
                 logger.LogInformation("Retrieving template ID: {TemplateId}", id);
                 
                 // ค้นหาเทมเพลตในฐานข้อมูล
-                var template = await db.QuerySingleOrDefaultAsync<SharedModels.LabelTemplate>(
+                var template = await db.QuerySingleOrDefaultAsync<LabelTemplateDto>(
                     "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @Id", 
                     new { Id = id });
                     
@@ -787,7 +1116,7 @@ public class Program
                 }
                 
                 // ดึงข้อมูล Components
-                var components = await db.QueryAsync<SharedModels.LabelTemplateComponent>(
+                var components = await db.QueryAsync<LabelTemplateComponent>(
                     "SELECT * FROM FgL.LabelTemplateComponent WHERE TemplateID = @Id",
                     new { Id = id });
                     
@@ -828,16 +1157,36 @@ public class Program
         /* ---------- 4.7.1  GET /api/templates/starters --------------------- */
         app.MapGet("/api/templates/starters", async ([FromServices] IDbConnection db) =>
         {
-            var templates = (await db.QueryAsync<SharedModels.LabelTemplate>(
+            var templates = (await db.QueryAsync<LabelTemplateDto>(
                 "SELECT * FROM FgL.LabelTemplate WHERE Active = 1 ORDER BY TemplateID ASC")).ToList();
-            var result = new List<SharedModels.LabelTemplate>();
+            var result = new List<dynamic>();
             
             foreach (var tpl in templates)
             {
-                var components = await db.QueryAsync<SharedModels.LabelTemplateComponent>(
+                var components = await db.QueryAsync<LabelTemplateComponent>(
                     "SELECT * FROM FgL.LabelTemplateComponent WHERE TemplateID = @Id", 
                     new { Id = tpl.TemplateID });
-                result.Add(tpl with { Components = components.ToList() });
+                
+                // สร้าง dynamic object เพื่อส่งกลับไปยัง client
+                var template = new
+                {
+                    tpl.TemplateID,
+                    tpl.Name,
+                    tpl.Description,
+                    tpl.Engine,
+                    tpl.PaperSize,
+                    tpl.Orientation,
+                    tpl.Content,
+                    tpl.ProductKey,
+                    tpl.CustomerKey,
+                    tpl.Version,
+                    tpl.Active,
+                    tpl.CreatedAt,
+                    tpl.UpdatedAt,
+                    Components = components.ToList()
+                };
+                
+                result.Add(template);
             }
             
             return Results.Ok(result);
@@ -857,7 +1206,7 @@ public class Program
                         b.ExpiryDate, b.ItemKey AS ProductKey, b.CustKey AS CustomerKey,
                         t.TemplateID, t.Name AS TemplateName, t.Version, t.Engine, 
                         t.PaperSize, t.Content
-                    FROM FgL.vw_Label_PrintData b
+                    FROM FgL.vw_Label_PrintSummary b
                     LEFT JOIN FgL.LabelTemplateMapping m ON 
                         (m.ProductKey = b.ItemKey OR m.ProductKey IS NULL) AND 
                         (m.CustomerKey = b.CustKey OR m.CustomerKey IS NULL) AND
@@ -1148,11 +1497,95 @@ public class Program
             }
         }).RequireAuthorization();
 
+        /* ---------- 2.3 Create Standard Template ----------- */
+        app.MapPost("/api/templates/create-standard", async ([FromBody] FgLabel.Api.Models.AutoCreateRequest request, HttpContext httpContext, IDbConnection db, ITemplateService templateService) =>
+        {
+            if (string.IsNullOrEmpty(request.BatchNo))
+            {
+                return Results.BadRequest(new { error = "BatchNo is required" });
+            }
+
+            try
+            {
+                // Call the template service to create standard template
+                var templateId = await templateService.AutoCreateTemplateAsync(request);
+                if (templateId <= 0)
+                {
+                    return Results.Problem("Failed to create template.");
+                }
+                
+                // Retrieve the created template
+                var savedTemplate = await db.QueryFirstOrDefaultAsync<LabelTemplateDto>(
+                    "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @Id", 
+                    new { Id = templateId });
+                    
+                return Results.Ok(savedTemplate);
+            }
+            catch (Exception ex)
+            {
+                return Results.Problem($"Error creating standard template: {ex.Message}");
+            }
+        });
+
+        /* ---------- 4.8  GET /api/printers --------------------------------- */
+        app.MapGet("/api/printers", async ([FromServices] IDbConnection db, ILogger<Program> logger) => 
+        {
+            try 
+            {
+                logger.LogInformation("Fetching list of printers");
+                var printers = await db.QueryAsync<PrinterProfile>(@"
+                    SELECT PrinterID, Name, Description, Location, Model, Dpi,
+                           CommandSet, IsDefault, Active, CreatedAt
+                    FROM FgL.PrinterProfile
+                    WHERE Active = 1
+                    ORDER BY IsDefault DESC, Name ASC");
+                
+                logger.LogInformation("Successfully retrieved {Count} printers", printers.Count());
+                return Results.Ok(printers);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error retrieving printer list: {Message}", ex.Message);
+                return Results.Problem(
+                    title: "Error retrieving printer list",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
+            }
+        }).RequireAuthorization();
+        
+        app.MapGet("/api/printers/{id}", async (int id, [FromServices] IDbConnection db, ILogger<Program> logger) => 
+        {
+            try 
+            {
+                logger.LogInformation("Fetching printer with ID: {Id}", id);
+                var printer = await db.QuerySingleOrDefaultAsync<PrinterProfile>(@"
+                    SELECT PrinterID, Name, Description, Location, Model, Dpi,
+                           CommandSet, IsDefault, Active, CreatedAt
+                    FROM FgL.PrinterProfile
+                    WHERE PrinterID = @Id", new { Id = id });
+                
+                if (printer == null)
+                {
+                    logger.LogWarning("Printer with ID {Id} not found", id);
+                    return Results.NotFound();
+                }
+                
+                logger.LogInformation("Successfully retrieved printer with ID: {Id}", id);
+                return Results.Ok(printer);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error retrieving printer with ID {Id}: {Message}", id, ex.Message);
+                return Results.Problem(
+                    title: "Error retrieving printer",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
+            }
+        }).RequireAuthorization();
+
         // Start the application
         await app.RunAsync();
     }
-
-    // Add static helper at bottom of file
-    private static object? GetValueByType(object source, string prop) =>
-        source.GetType().GetProperty(prop)?.GetValue(source);
 }

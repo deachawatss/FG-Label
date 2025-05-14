@@ -1,25 +1,45 @@
-import { ReactNode } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
+import { useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/router';
+import { useAuth } from '@/contexts/AuthContext';
+import { Spin } from 'antd';
 
-interface Props {
+interface RequireAuthProps {
   children: ReactNode;
 }
 
-export default function RequireAuth({ children }: Props) {
-  const { isAuthenticated, loading } = useAuth();
+const RequireAuth = ({ children }: RequireAuthProps) => {
+  const { isAuthenticated, isAuthenticating, error } = useAuth();
   const router = useRouter();
 
-  if (loading) {
-    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
-  }
-
-  if (!isAuthenticated) {
-    if (typeof window !== 'undefined') {
-      router.replace('/login');
+  useEffect(() => {
+    if (!isAuthenticating && !isAuthenticated) {
+      router.push('/login');
     }
-    return null;
+  }, [isAuthenticated, isAuthenticating, router]);
+
+  if (isAuthenticating) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <Spin>
+          <div style={{ padding: '30px', textAlign: 'center' }}>
+            กำลังตรวจสอบการเข้าสู่ระบบ...
+          </div>
+        </Spin>
+      </div>
+    );
   }
 
-  return <>{children}</>;
-} 
+  if (error) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column' }}>
+        <h2>เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์</h2>
+        <p>{error}</p>
+        <button onClick={() => router.push('/login')}>กลับไปหน้าเข้าสู่ระบบ</button>
+      </div>
+    );
+  }
+
+  return isAuthenticated ? <>{children}</> : null;
+};
+
+export default RequireAuth; 

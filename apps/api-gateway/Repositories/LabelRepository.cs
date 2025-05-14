@@ -31,7 +31,7 @@ public class LabelRepository : ILabelRepository
             // ใช้ SQL VIEW ที่มีอยู่แล้วเพื่อดึงข้อมูล
             var query = @"
                 SELECT TOP 1 *
-                FROM FgL.vw_Label_PrintData 
+                FROM FgL.vw_Label_PrintSummary 
                 WHERE BatchNo = @batchNo";
                 
             var result = await _db.QueryFirstOrDefaultAsync<dynamic>(query, new { batchNo });

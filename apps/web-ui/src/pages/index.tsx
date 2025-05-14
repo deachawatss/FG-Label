@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "next/router";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePrinter } from "@/hooks/usePrinter";
 import api from '@/lib/api';
@@ -66,8 +66,8 @@ export default function Home() {
     const fetchPrintersAndTemplates = async () => {
       try {
         const [printersRes, templatesRes] = await Promise.all([
-          api.get("/api/printers"),
-          api.get("/api/templates")
+          api.get("/printers"),
+          api.get("/templates")
         ]);
         setPrinters(printersRes.data);
         setTemplates(templatesRes.data);
@@ -101,7 +101,7 @@ export default function Home() {
     setError(null);
 
     try {
-      const response = await api.get(`/api/batch/${batchNo}`);
+      const response = await api.get(`/batch/${batchNo}`);
       setBatch(response.data);
     } catch (error: unknown) {
       console.error("Error searching batch:", error);
@@ -134,7 +134,7 @@ export default function Home() {
 
     try {
       // ส่งข้อมูลไปยัง API เพื่อบันทึก print job
-      const printJobResponse = await api.post("/api/jobs", {
+      const printJobResponse = await api.post("/jobs", {
         batchNo: batch.batchNo,
         productKey: batch.productKey,
         customerKey: batch.customerKey,
@@ -148,7 +148,7 @@ export default function Home() {
       await printDocument(selectedTemplate.content);
 
       // อัพเดทสถานะ print job เป็น COMPLETED
-      await api.put(`/api/jobs/${printJobResponse.data.jobId}`, {
+      await api.put(`/jobs/${printJobResponse.data.jobId}`, {
         status: "COMPLETED"
       });
 
