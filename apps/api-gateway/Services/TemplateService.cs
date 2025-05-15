@@ -109,6 +109,120 @@ namespace FgLabel.Api.Services
             return newTemplateId;
         }
 
+        private async Task UpdateTemplateMappingAsync(int templateId, string productKey, string customerKey)
+        {
+            try
+            {
+                _logger.LogInformation("เริ่มการอัพเดต template mapping ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}", productKey, customerKey);
+                
+                // ตรวจสอบว่า stored procedure มีอยู่หรือไม่
+                bool spExists = await CheckStoredProcedureExists("FgL.UpdateTemplateMappingWithStringKeys");
+                
+                if (spExists)
+                {
+                    // บันทึกลงในตาราง mapping ชุดใหม่โดยใช้ stored procedure ที่สร้างไว้
+                    var sql = "EXEC FgL.UpdateTemplateMappingWithStringKeys @TemplateID, @ProductKey, @CustomerKey";
+                    
+                    await _sql.GetConnection().ExecuteAsync(sql, new
+                    {
+                        TemplateID = templateId,
+                        ProductKey = string.IsNullOrEmpty(productKey) ? string.Empty : productKey,
+                        CustomerKey = string.IsNullOrEmpty(customerKey) ? string.Empty : customerKey
+                    });
+                    
+                    _logger.LogInformation("อัพเดต template mapping สำเร็จสำหรับ TemplateID={TemplateId}, ProductKey={ProductKey}, CustomerKey={CustomerKey}",
+                        templateId, productKey, customerKey);
+                }
+                else
+                {
+                    _logger.LogWarning("ไม่พบ stored procedure FgL.UpdateTemplateMappingWithStringKeys จะใช้การบันทึกตรงแทน");
+                }
+                
+                // บันทึกโดยตรงในตาราง string mapping ด้วยเพื่อความปลอดภัย
+                if (!string.IsNullOrEmpty(productKey) && productKey != "system")
+                {
+                    var prodSql = @"
+                        INSERT INTO FgL.TemplateMappingProductString
+                            (TemplateId, ProductKeyString, Active, CreatedAt)
+                        VALUES
+                            (@TemplateId, @ProductKeyString, 1, GETUTCDATE())";
+                    
+                    try
+                    {
+                        await _sql.GetConnection().ExecuteAsync(prodSql, new
+                        {
+                            TemplateId = templateId,
+                            ProductKeyString = productKey
+                        });
+                        
+                        _logger.LogInformation("สร้าง mapping สำหรับ ProductKey {ProductKey} และ Template {TemplateId} สำเร็จ",
+                            productKey, templateId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ไม่สามารถสร้าง ProductKey mapping: {Message}", ex.Message);
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(customerKey) && customerKey != "system")
+                {
+                    var custSql = @"
+                        INSERT INTO FgL.TemplateMappingCustomerString
+                            (TemplateId, CustomerKeyString, Active, CreatedAt)
+                        VALUES
+                            (@TemplateId, @CustomerKeyString, 1, GETUTCDATE())";
+                    
+                    try
+                    {
+                        await _sql.GetConnection().ExecuteAsync(custSql, new
+                        {
+                            TemplateId = templateId,
+                            CustomerKeyString = customerKey
+                        });
+                        
+                        _logger.LogInformation("สร้าง mapping สำหรับ CustomerKey {CustomerKey} และ Template {TemplateId} สำเร็จ",
+                            customerKey, templateId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ไม่สามารถสร้าง CustomerKey mapping: {Message}", ex.Message);
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(productKey) && productKey != "system" && 
+                    !string.IsNullOrEmpty(customerKey) && customerKey != "system")
+                {
+                    var prodCustSql = @"
+                        INSERT INTO FgL.TemplateMappingProductCustomerString
+                            (TemplateId, ProductKeyString, CustomerKeyString, Active, CreatedAt)
+                        VALUES
+                            (@TemplateId, @ProductKeyString, @CustomerKeyString, 1, GETUTCDATE())";
+                    
+                    try
+                    {
+                        await _sql.GetConnection().ExecuteAsync(prodCustSql, new
+                        {
+                            TemplateId = templateId,
+                            ProductKeyString = productKey,
+                            CustomerKeyString = customerKey
+                        });
+                        
+                        _logger.LogInformation("สร้าง mapping สำหรับ ProductKey {ProductKey}, CustomerKey {CustomerKey} และ Template {TemplateId} สำเร็จ",
+                            productKey, customerKey, templateId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ไม่สามารถสร้าง ProductKey+CustomerKey mapping: {Message}", ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "เกิดข้อผิดพลาดในการสร้าง template mapping: {Message}", ex.Message);
+                // ไม่ throw exception เนื่องจากไม่ใช่ส่วนสำคัญที่จะทำให้การทำงานหลักล้มเหลว
+            }
+        }
+
         public async Task<int> AutoCreateTemplateAsync(AutoCreateRequest request)
         {
             try
@@ -292,18 +406,17 @@ namespace FgLabel.Api.Services
                 // 4. บันทึก template ลงฐานข้อมูล
                 var sql = @"
                     INSERT INTO FgL.LabelTemplate 
-                        (Name, Content, Version, CreatedBy, CreatedAt, UpdatedAt)
+                        (Name, Content, Version, CreatedAt, UpdatedAt)
                     VALUES 
-                        (@Name, @Content, @Version, @CreatedBy, @CreatedAt, @UpdatedAt);
+                        (@Name, @Content, @Version, @CreatedAt, @UpdatedAt);
                     SELECT SCOPE_IDENTITY();";
                 
-                // ไม่ใส่ค่า ProductKey และ CustomerKey เพื่อหลีกเลี่ยงปัญหาการแปลงค่าเป็น int
+                // ไม่ใส่ค่า ProductKey, CustomerKey และ CreatedBy เพื่อหลีกเลี่ยงปัญหาการแปลงค่าเป็น int
                 var param = new
                 {
                     Name = $"Auto-{request.BatchNo}-{DateTime.UtcNow:yyyyMMdd}",
                     Content = templateJson,
                     Version = 1,
-                    CreatedBy = "system",
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -312,7 +425,7 @@ namespace FgLabel.Api.Services
                 _logger.LogInformation("สร้าง template {TemplateId} สำหรับ batch {BatchNo} เรียบร้อย", templateId, request.BatchNo);
                 
                 // 5. สร้าง mapping แยกตามประเภทข้อมูล
-                await UpdateTemplateMappingAsync(productKey ?? string.Empty, customerKey ?? string.Empty, templateId);
+                await UpdateTemplateMappingAsync(templateId, productKey ?? string.Empty, customerKey ?? string.Empty);
                 
                 return templateId;
             }
@@ -323,69 +436,35 @@ namespace FgLabel.Api.Services
             }
         }
 
-        private async Task UpdateTemplateMappingAsync(string productKey, string customerKey, int templateId)
+        public async Task<int> AutoCreateTemplateAsync(string batchNo, string templateName, string templateContent, string productKey, string customerKey)
         {
-            // ตรวจสอบการแปลงค่า productKey และ customerKey เป็น int?
-            int? productKeyInt = null;
-            int? customerKeyInt = null;
-            
-            // ตรวจสอบการแปลงค่า productKey - เพิ่มการตรวจสอบว่าเป็นตัวเลขจริงๆ
-            if (!string.IsNullOrEmpty(productKey) && productKey != "system" && 
-                !productKey.Contains(" ") && // ป้องกันกรณีมีช่องว่าง
-                int.TryParse(productKey, out var prodKeyInt))
-            {
-                productKeyInt = prodKeyInt;
-            }
-            
-            // ตรวจสอบการแปลงค่า customerKey - เพิ่มการตรวจสอบว่าเป็นตัวเลขจริงๆ
-            if (!string.IsNullOrEmpty(customerKey) && customerKey != "system" && 
-                !customerKey.Contains(" ") && // ป้องกันกรณีมีช่องว่าง
-                int.TryParse(customerKey, out var custKeyInt))
-            {
-                customerKeyInt = custKeyInt;
-            }
-            
             try
             {
-                // Deactivate existing mappings for this template first
-                var deactivateSql = @"
-                    UPDATE FgL.LabelTemplateMapping 
-                    SET IsActive = 0, UpdatedAt = GETUTCDATE(), UpdatedBy = 'system'
-                    WHERE TemplateID = @TemplateID";
+                _logger.LogInformation("กำลังสร้าง template อัตโนมัติสำหรับ batch {BatchNo} ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}",
+                    batchNo, productKey, customerKey);
                 
-                await _sql.GetConnection().ExecuteAsync(deactivateSql, new { TemplateID = templateId });
+                var sql = @"
+                    INSERT INTO FgL.LabelTemplate (Name, Content, IsActive, CreatedAt, UpdatedAt)
+                    VALUES (@Name, @Content, 1, GETDATE(), GETDATE());
+                    SELECT SCOPE_IDENTITY()";
                 
-                // Create new mapping - เพิ่มการตรวจสอบว่ามีค่า key หรือไม่
-                if (productKeyInt.HasValue || customerKeyInt.HasValue)
+                var templateId = await _sql.GetConnection().ExecuteScalarAsync<int>(sql, new
                 {
-                    var createSql = @"
-                        INSERT INTO FgL.LabelTemplateMapping (
-                            TemplateID, ProductKey, CustomerKey, IsActive, CreatedAt, CreatedBy
-                        ) VALUES (
-                            @TemplateID, @ProductKey, @CustomerKey, 1, GETUTCDATE(), 'system'
-                        )";
-                    
-                    await _sql.GetConnection().ExecuteAsync(createSql, new { 
-                        TemplateID = templateId, 
-                        ProductKey = productKeyInt, 
-                        CustomerKey = customerKeyInt 
-                    });
-                    
-                    _logger.LogInformation(
-                        "Updated template mapping for Template {TemplateID}: ProductKey={ProductKey}, CustomerKey={CustomerKey}", 
-                        templateId, productKeyInt, customerKeyInt);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "Skipping template mapping for Template {TemplateID} because ProductKey and CustomerKey are not valid integers", 
-                        templateId);
-                }
+                    Name = templateName,
+                    Content = templateContent
+                });
+                
+                _logger.LogInformation("สร้าง template {TemplateId} สำเร็จ กำลังสร้าง mapping", templateId);
+                
+                // สร้าง mapping สำหรับ template นี้
+                await UpdateTemplateMappingAsync(templateId, productKey, customerKey);
+                
+                return templateId;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating template mapping for Template {TemplateID}", templateId);
-                // ไม่โยน exception ออกไปเพื่อให้การสร้าง template สำเร็จแม้จะไม่สามารถ map ได้
+                _logger.LogError(ex, "เกิดข้อผิดพลาดในการสร้าง template อัตโนมัติสำหรับ batch {BatchNo}", batchNo);
+                return 0;
             }
         }
 
@@ -403,13 +482,13 @@ namespace FgLabel.Api.Services
                 // Insert or update template
                 var templateId = await connection.ExecuteScalarAsync<int>(
                     @"MERGE INTO FgL.LabelTemplate AS target
-                    USING (VALUES (@Name, @ProductKey, @CustomerKey)) AS source (Name, ProductKey, CustomerKey)
-                    ON target.Name = source.Name AND target.ProductKey = source.ProductKey AND target.CustomerKey = source.CustomerKey
+                    USING (VALUES (@Name)) AS source (Name)
+                    ON target.Name = source.Name
                     WHEN MATCHED THEN 
                         UPDATE SET Description = @Description, Engine = @Engine, PaperSize = @PaperSize, Orientation = @Orientation, Content = @Content, UpdatedAt = SYSUTCDATETIME()
                     WHEN NOT MATCHED THEN
-                        INSERT (Name, Description, Engine, PaperSize, Orientation, Content, ProductKey, CustomerKey, CreatedAt)
-                        VALUES (source.Name, @Description, @Engine, @PaperSize, @Orientation, @Content, source.ProductKey, source.CustomerKey, SYSUTCDATETIME())
+                        INSERT (Name, Description, Engine, PaperSize, Orientation, Content, CreatedAt)
+                        VALUES (source.Name, @Description, @Engine, @PaperSize, @Orientation, @Content, SYSUTCDATETIME())
                     OUTPUT inserted.TemplateID;",
                     new
                     {
@@ -418,9 +497,7 @@ namespace FgLabel.Api.Services
                         Engine = dto.Engine,
                         PaperSize = dto.PaperSize,
                         Orientation = dto.Orientation,
-                        Content = dto.Content,
-                        ProductKey = string.IsNullOrEmpty(dto.ProductKey) ? string.Empty : dto.ProductKey,
-                        CustomerKey = string.IsNullOrEmpty(dto.CustomerKey) ? string.Empty : dto.CustomerKey
+                        Content = dto.Content
                     }, tran);
 
                 // Optional product/customer mapping
@@ -429,27 +506,95 @@ namespace FgLabel.Api.Services
                     _logger.LogInformation("Creating template mapping with ProductKey: {ProductKey}, CustomerKey: {CustomerKey}",
                         dto.ProductKey, dto.CustomerKey);
                     
-                    // Check and delete any duplicate mappings
-                    await connection.ExecuteAsync(
-                        @"DELETE FROM FgL.LabelTemplateMapping 
-                          WHERE (ProductKey = @ProductKey OR (ProductKey IS NULL AND @ProductKey IS NULL))
-                          AND (CustomerKey = @CustomerKey OR (CustomerKey IS NULL AND @CustomerKey IS NULL));",
-                        new { 
-                            ProductKey = string.IsNullOrEmpty(dto.ProductKey) ? string.Empty : dto.ProductKey,
-                            CustomerKey = string.IsNullOrEmpty(dto.CustomerKey) ? string.Empty : dto.CustomerKey
-                        }, tran);
+                    // ตรวจสอบว่า stored procedure มีอยู่หรือไม่
+                    bool spExists = await CheckStoredProcedureExists("FgL.UpdateTemplateMappingWithStringKeys");
+                    
+                    if (spExists)
+                    {
+                        // เรียกใช้ stored procedure สำหรับอัพเดต mapping
+                        var spSql = "EXEC FgL.UpdateTemplateMappingWithStringKeys @TemplateID, @ProductKey, @CustomerKey";
                         
-                    // Insert mapping with Priority = 5 as default
-                    await connection.ExecuteAsync(
-                        @"INSERT INTO FgL.LabelTemplateMapping
-                              (TemplateID, ProductKey, CustomerKey, Priority, Active, CreatedAt)
-                          VALUES
-                              (@TemplateID, @ProductKey, @CustomerKey, 5, 1, SYSUTCDATETIME());",
-                        new { 
+                        await connection.ExecuteAsync(spSql, new
+                        {
                             TemplateID = templateId,
                             ProductKey = string.IsNullOrEmpty(dto.ProductKey) ? string.Empty : dto.ProductKey,
                             CustomerKey = string.IsNullOrEmpty(dto.CustomerKey) ? string.Empty : dto.CustomerKey
                         }, tran);
+                        
+                        _logger.LogInformation("Template mapping updated successfully for ProductKey: {ProductKey}, CustomerKey: {CustomerKey}",
+                            dto.ProductKey, dto.CustomerKey);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("ไม่พบ stored procedure FgL.UpdateTemplateMappingWithStringKeys จะสร้าง mapping แบบตรง");
+                        
+                        // บันทึกโดยตรงในตาราง TemplateMappingProductString
+                        if (!string.IsNullOrEmpty(dto.ProductKey))
+                        {
+                            try
+                            {
+                                await connection.ExecuteAsync(
+                                    @"INSERT INTO FgL.TemplateMappingProductString
+                                        (TemplateId, ProductKeyString, Active, CreatedAt)
+                                      VALUES
+                                        (@TemplateId, @ProductKeyString, 1, GETUTCDATE())",
+                                    new
+                                    {
+                                        TemplateId = templateId,
+                                        ProductKeyString = dto.ProductKey
+                                    }, tran);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "ไม่สามารถสร้าง ProductKey mapping: {Message}", ex.Message);
+                            }
+                        }
+                        
+                        // บันทึกโดยตรงในตาราง TemplateMappingCustomerString
+                        if (!string.IsNullOrEmpty(dto.CustomerKey))
+                        {
+                            try
+                            {
+                                await connection.ExecuteAsync(
+                                    @"INSERT INTO FgL.TemplateMappingCustomerString
+                                        (TemplateId, CustomerKeyString, Active, CreatedAt)
+                                      VALUES
+                                        (@TemplateId, @CustomerKeyString, 1, GETUTCDATE())",
+                                    new
+                                    {
+                                        TemplateId = templateId,
+                                        CustomerKeyString = dto.CustomerKey
+                                    }, tran);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "ไม่สามารถสร้าง CustomerKey mapping: {Message}", ex.Message);
+                            }
+                        }
+                        
+                        // บันทึกโดยตรงในตาราง TemplateMappingProductCustomerString
+                        if (!string.IsNullOrEmpty(dto.ProductKey) && !string.IsNullOrEmpty(dto.CustomerKey))
+                        {
+                            try
+                            {
+                                await connection.ExecuteAsync(
+                                    @"INSERT INTO FgL.TemplateMappingProductCustomerString
+                                        (TemplateId, ProductKeyString, CustomerKeyString, Active, CreatedAt)
+                                      VALUES
+                                        (@TemplateId, @ProductKeyString, @CustomerKeyString, 1, GETUTCDATE())",
+                                    new
+                                    {
+                                        TemplateId = templateId,
+                                        ProductKeyString = dto.ProductKey,
+                                        CustomerKeyString = dto.CustomerKey
+                                    }, tran);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "ไม่สามารถสร้าง ProductKey+CustomerKey mapping: {Message}", ex.Message);
+                            }
+                        }
+                    }
                 }
 
                 // Insert components
@@ -827,7 +972,10 @@ namespace FgLabel.Api.Services
             try
             {
                 // ดึงข้อมูล batch
-                var batchSql = @"SELECT ItemKey, CustKey FROM FgL.vw_Label_PrintSummary WHERE BatchNo = @BatchNo";
+                var batchSql = @"SELECT ItemKeyResolved as ProductKey, CustKeyResolved as CustomerKey, 
+                                ItemKey, CustKey, Product as ProductName
+                                FROM FgL.vw_Label_PrintSummary 
+                                WHERE BatchNo = @BatchNo";
                 var batch = await _sql.GetConnection().QueryFirstOrDefaultAsync(batchSql, new { BatchNo = batchNo });
                 
                 if (batch == null)
@@ -836,43 +984,128 @@ namespace FgLabel.Api.Services
                     return 0;
                 }
                 
-                // แปลงค่า ItemKey และ CustKey เป็น int
-                int? productKey = null;
-                int? customerKey = null;
+                // เก็บค่า ProductKey และ CustomerKey เป็น string
+                // ให้ความสำคัญกับ ItemKeyResolved และ CustKeyResolved ก่อน
+                string productKeyStr = batch.ProductKey?.ToString() ?? batch.ItemKey?.ToString();
+                string customerKeyStr = batch.CustomerKey?.ToString() ?? batch.CustKey?.ToString();
                 
-                if (int.TryParse(batch.ItemKey?.ToString(), out int prodKey))
+                _logger.LogInformation("ค้นหา template สำหรับ batch {BatchNo} ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}",
+                    batchNo, productKeyStr, customerKeyStr);
+                
+                // ตรวจสอบว่า stored procedure มีอยู่หรือไม่
+                bool spExists = await CheckStoredProcedureExists("FgL.GetTemplateByProductAndCustomerKeys");
+                
+                int? templateId = null;
+                
+                if (spExists)
                 {
-                    productKey = prodKey;
+                    // ใช้ stored procedure ที่สร้างไว้ค้นหา template จากทั้งตาราง string mapping ใหม่และตารางเก่า
+                    var spSql = "EXEC FgL.GetTemplateByProductAndCustomerKeys @ProductKey, @CustomerKey";
+                    templateId = await _sql.GetConnection().ExecuteScalarAsync<int?>(spSql, 
+                        new { ProductKey = productKeyStr, CustomerKey = customerKeyStr });
+                }
+                else
+                {
+                    _logger.LogWarning("ไม่พบ stored procedure FgL.GetTemplateByProductAndCustomerKeys จะใช้การค้นหาตรงแทน");
+                    
+                    // ค้นหาจากตาราง TemplateMappingProductCustomerString ก่อน (ถ้ามีทั้ง product และ customer key)
+                    if (!string.IsNullOrEmpty(productKeyStr) && !string.IsNullOrEmpty(customerKeyStr))
+                    {
+                        var sql = @"
+                            SELECT TOP 1 TemplateId
+                            FROM FgL.TemplateMappingProductCustomerString
+                            WHERE Active = 1
+                              AND ProductKeyString = @ProductKey
+                              AND CustomerKeyString = @CustomerKey
+                            ORDER BY ID DESC";
+                              
+                        templateId = await _sql.GetConnection().ExecuteScalarAsync<int?>(sql,
+                            new { ProductKey = productKeyStr, CustomerKey = customerKeyStr });
+                    }
+                    
+                    // ถ้าไม่พบ ค้นหาจากตาราง TemplateMappingProductString (ถ้ามี product key)
+                    if ((templateId == null || templateId == 0) && !string.IsNullOrEmpty(productKeyStr))
+                    {
+                        var sql = @"
+                            SELECT TOP 1 TemplateId
+                            FROM FgL.TemplateMappingProductString
+                            WHERE Active = 1
+                              AND ProductKeyString = @ProductKey
+                            ORDER BY ID DESC";
+                              
+                        templateId = await _sql.GetConnection().ExecuteScalarAsync<int?>(sql,
+                            new { ProductKey = productKeyStr });
+                    }
+                    
+                    // ถ้าไม่พบ ค้นหาจากตาราง TemplateMappingCustomerString (ถ้ามี customer key)
+                    if ((templateId == null || templateId == 0) && !string.IsNullOrEmpty(customerKeyStr))
+                    {
+                        var sql = @"
+                            SELECT TOP 1 TemplateId
+                            FROM FgL.TemplateMappingCustomerString
+                            WHERE Active = 1
+                              AND CustomerKeyString = @CustomerKey
+                            ORDER BY ID DESC";
+                              
+                        templateId = await _sql.GetConnection().ExecuteScalarAsync<int?>(sql,
+                            new { CustomerKey = customerKeyStr });
+                    }
+                    
+                    // ถ้ายังไม่พบอีก ให้ลองค้นหาจากตาราง LabelTemplate โดยตรง
+                    if (templateId == null || templateId == 0)
+                    {
+                        var sql = @"
+                            SELECT TOP 1 TemplateID
+                            FROM FgL.LabelTemplate
+                            WHERE Active = 1
+                              AND (
+                                  (ProductKey = @ProductKey AND CustomerKey = @CustomerKey)
+                                  OR (ProductKey = @ProductKey AND (CustomerKey IS NULL OR CustomerKey = ''))
+                                  OR (CustomerKey = @CustomerKey AND (ProductKey IS NULL OR ProductKey = ''))
+                              )
+                            ORDER BY
+                              CASE
+                                  WHEN ProductKey = @ProductKey AND CustomerKey = @CustomerKey THEN 1
+                                  WHEN ProductKey = @ProductKey THEN 2
+                                  WHEN CustomerKey = @CustomerKey THEN 3
+                                  ELSE 4
+                              END,
+                              TemplateID DESC";
+                              
+                        templateId = await _sql.GetConnection().ExecuteScalarAsync<int?>(sql,
+                            new { ProductKey = productKeyStr, CustomerKey = customerKeyStr });
+                    }
                 }
                 
-                if (int.TryParse(batch.CustKey?.ToString(), out int custKey))
+                if (templateId.HasValue && templateId.Value > 0)
                 {
-                    customerKey = custKey;
+                    _logger.LogInformation("พบ template {TemplateId} สำหรับ batch {BatchNo}", templateId, batchNo);
+                    return templateId.Value;
                 }
                 
-                // ค้นหา template mapping ที่เหมาะสม
-                var sql = @"
-                    SELECT TOP 1 TemplateID
-                    FROM FgL.LabelTemplateMapping
-                    WHERE IsActive = 1
-                    AND (@ProductKey IS NULL OR ProductKey = @ProductKey)
-                    AND (@CustomerKey IS NULL OR CustomerKey = @CustomerKey)
-                    ORDER BY 
-                        CASE 
-                            WHEN ProductKey = @ProductKey AND CustomerKey = @CustomerKey THEN 1
-                            WHEN ProductKey = @ProductKey AND CustomerKey IS NULL THEN 2
-                            WHEN ProductKey IS NULL AND CustomerKey = @CustomerKey THEN 3
-                            ELSE 4
-                        END,
-                        Priority";
+                _logger.LogInformation("ไม่พบ template mapping สำหรับ ProductKey={ProductKey}, CustomerKey={CustomerKey} จะสร้าง template ใหม่",
+                    productKeyStr, customerKeyStr);
+                    
+                // สร้าง template ใหม่อัตโนมัติ
+                var autoCreateRequest = new AutoCreateRequest
+                {
+                    BatchNo = batchNo
+                };
                 
-                var templateId = await _sql.GetConnection().ExecuteScalarAsync<int?>(sql, new { ProductKey = productKey, CustomerKey = customerKey });
+                var newTemplateId = await AutoCreateTemplateAsync(autoCreateRequest);
                 
-                return templateId ?? 0;
+                if (newTemplateId > 0)
+                {
+                    _logger.LogInformation("สร้าง template ใหม่ {TemplateId} สำหรับ batch {BatchNo}", newTemplateId, batchNo);
+                    return newTemplateId;
+                }
+                
+                _logger.LogWarning("ไม่สามารถสร้าง template ใหม่สำหรับ batch {BatchNo} ได้", batchNo);
+                return 0;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error finding template mapping for batch {BatchNo}", batchNo);
+                _logger.LogError(ex, "Error finding or creating template mapping for batch {BatchNo}", batchNo);
                 return 0;
             }
         }
@@ -888,6 +1121,27 @@ namespace FgLabel.Api.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting template {TemplateID}", templateId);
+                return false;
+            }
+        }
+
+        // เพิ่มเมธอดใหม่สำหรับตรวจสอบว่า stored procedure มีอยู่ในฐานข้อมูลหรือไม่
+        private async Task<bool> CheckStoredProcedureExists(string procedureName)
+        {
+            try
+            {
+                var sql = @"
+                    SELECT COUNT(1) 
+                    FROM sys.objects 
+                    WHERE type = 'P' 
+                      AND OBJECT_ID = OBJECT_ID(@ProcedureName)";
+                
+                var count = await _sql.GetConnection().ExecuteScalarAsync<int>(sql, new { ProcedureName = procedureName });
+                return count > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "เกิดข้อผิดพลาดในการตรวจสอบ stored procedure {ProcedureName}", procedureName);
                 return false;
             }
         }

@@ -35,9 +35,9 @@ import {
 } from '@ant-design/icons';
 import axios from 'axios';
 import RequireAuth from '../components/RequireAuth';
-import LabelPreview from '../components/LabelPreview';
 import dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
+import { useRouter } from 'next/router';
 
 // เพิ่มการนำเข้า Option จาก Select
 const { Option } = Select;
@@ -528,6 +528,20 @@ const createStandardTemplate = (batch: Batch): any => {
   const palletNo = batch.palletNo || '01';
   const lineCode = `P${palletNo}B${formattedBagNo}`;
   
+  // ใช้ข้อมูลจาก batch โดยตรง
+  const productKey = batch.productKey || '';
+  const productName = batch.productName || '';
+  const processCell = batch.processCell || '1B';
+  const netWeight = batch.netWeight || '25.00';
+  const lotCode = batch.lotCode || '';
+  const lotDate = batch.lotDate || '';
+  const bestBeforeDate = batch.bestBeforeDate || '';
+  const expiryDateCaption = batch.expiryDateCaption || 'BEST BEFORE';
+  const soNumber = batch.soNumber || 'S2508217';
+  const allergensLabel = batch.allergensLabel || '';
+  const storageCondition = batch.storageCondition || '';
+  const manufacturerInfo = batch.manufacturerInfo || 'MANUFACTURED BY : Newly Weds Foods (Thailand) Limited\n909 Moo 15, Teparak Road, T.Bangsaothong, A.Bangsaothong, Samutprakarn 10570\nThailand Phone (662) 3159000 Fax (662) 3131638-9';
+  
   // สร้าง elements พื้นฐาน
   const elements = [
     // ชื่อสินค้า
@@ -550,7 +564,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 10,
       width: 200,
       height: 20,
-      text: batch.productKey || '',
+      text: productKey,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -575,7 +589,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 30,
       width: 200,
       height: 20,
-      text: batch.productName || '',
+      text: productName,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -600,7 +614,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 50,
       width: 200,
       height: 20,
-      text: batch.processCell || '',
+      text: processCell,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -651,7 +665,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 100,
       width: 130,
       height: 20,
-      text: `${batch.netWeight || '25.00'} KG/BAG`,
+      text: `${netWeight} KG/BAG`,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -664,7 +678,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 100,
       width: 40,
       height: 20,
-      text: batch.processCell || '1B',
+      text: processCell,
       fontSize: 16,
       textAlign: 'right'
     },
@@ -688,7 +702,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 125,
       width: 130,
       height: 20,
-      text: batch.lotDate || '',
+      text: lotDate,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -714,7 +728,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 150,
       width: 120,
       height: 20,
-      text: batch.expiryDateCaption || 'BEST BEFORE:',
+      text: expiryDateCaption,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -725,7 +739,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 150,
       width: 170,
       height: 20,
-      text: batch.bestBeforeDate || '',
+      text: bestBeforeDate,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -738,7 +752,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 150,
       width: 80,
       height: 20,
-      text: batch.soNumber || 'S2508217',
+      text: soNumber,
       fontSize: 16,
       textAlign: 'right'
     },
@@ -751,7 +765,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 180,
       width: 350,
       height: 20,
-      text: `Allergens : ${batch.allergensLabel || ''}`,
+      text: `Allergens : ${allergensLabel}`,
       fontSize: 16,
       textAlign: 'left'
     },
@@ -764,7 +778,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 205,
       width: 350,
       height: 20,
-      text: `Recommended Storage : ${batch.storageCondition || ''}`,
+      text: `Recommended Storage : ${storageCondition}`,
       fontSize: 14,
       textAlign: 'left'
     },
@@ -777,7 +791,7 @@ const createStandardTemplate = (batch: Batch): any => {
       y: 235,
       width: 350,
       height: 60,
-      text: batch.manufacturerInfo || 'MANUFACTURED BY : Newly Weds Foods (Thailand) Limited\n909 Moo 15, Teparak Road, T.Bangsaothong, A.Bangsaothong, Samutprakarn 10570\nThailand Phone (662) 3159000 Fax (662) 3131638-9',
+      text: manufacturerInfo,
       fontSize: 10,
       textAlign: 'left',
       lineHeight: 1.2
@@ -871,6 +885,9 @@ const BatchSearch: React.FC = () => {
   const [qrScanData, setQrScanData] = useState<any>(null);
   const [qrPopupVisible, setQrPopupVisible] = useState<boolean>(false);
   
+  // เพิ่ม router สำหรับการนำทาง
+  const router = useRouter();
+  
   // เพิ่มฟังก์ชันสำหรับการจัดการสแกน QR code
   const handleQrScan = (data: string) => {
     if (!data) return;
@@ -917,6 +934,7 @@ const BatchSearch: React.FC = () => {
                 height: 50,
                 displayValue: true,
                 fontSize: 14,
+                font: 'monospace',
                 margin: 5,
                 textAlign: "center",
                 textPosition: "bottom",
@@ -937,6 +955,7 @@ const BatchSearch: React.FC = () => {
                   height: 50,
                   displayValue: true,
                   fontSize: 14,
+                  font: 'monospace',
                   margin: 5,
                   textAlign: "center",
                   textPosition: "bottom",
@@ -1189,25 +1208,63 @@ const BatchSearch: React.FC = () => {
         productionDate: selectedProductionDate
       };
       
-      // คำนวณวันหมดอายุใหม่
-      let bestBefore = null;
+      // คำนวณวันหมดอายุใหม่ตาม logic เดิม
       if (selectedProductionDate) {
-        bestBefore = DateHelper.calculateBestBefore(
+        console.log('Calculating best before with production date:', selectedProductionDate);
+        
+        // ใช้ DateHelper.calculateBestBefore เพื่อคำนวณวันหมดอายุ
+        // ฟังก์ชันนี้จะคืนค่าในรูปแบบ DD/MM/YYYY
+        const bestBeforeDate = DateHelper.calculateBestBefore(
           selectedProductionDate,
           selectedBatch.shelfLifeDays,
           selectedBatch.daysToExpire
         );
         
-        // ปรับปรุงค่าวันหมดอายุใน newBatch
-        if (bestBefore) {
-          const bestBeforeDate = dayjs(bestBefore, 'DD/MM/YYYY').toDate();
-          newBatch.expiryDate = dayjs(bestBeforeDate).format('YYYY-MM-DD');
+        console.log('Calculated bestBeforeDate (DD/MM/YYYY):', bestBeforeDate);
+        
+        if (bestBeforeDate) {
+          // กำหนดค่า bestBeforeDate ในรูปแบบ "06 May 2025" โดยใช้ DateHelper.formatDate
+          // แปลงจากรูปแบบ DD/MM/YYYY เป็น YYYY-MM-DD ก่อน แล้วใช้ DateHelper.formatDate
+          const parts = bestBeforeDate.split('/');
+          if (parts.length === 3) {
+            const expiryDateISO = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            newBatch.expiryDate = expiryDateISO;
+            
+            // ใช้ DateHelper.formatDate เพื่อแปลงเป็นรูปแบบ "06 May 2025"
+            newBatch.bestBeforeDate = DateHelper.formatDate(expiryDateISO);
+            
+            console.log('Updated expiryDate (YYYY-MM-DD):', newBatch.expiryDate);
+            console.log('Updated bestBeforeDate (formatted):', newBatch.bestBeforeDate);
+          } else {
+            // ถ้าไม่สามารถแยกส่วนได้ ใช้ค่าเดิม
+            newBatch.bestBeforeDate = bestBeforeDate;
+            console.log('Using original bestBeforeDate:', bestBeforeDate);
+          }
         }
       }
       
+      // คำนวณ lotCode ใหม่ถ้าจำเป็น (ถ้า lotCode สร้างจาก productionDate)
+      if (selectedProductionDate && (!newBatch.lotCode || newBatch.lotCode === '')) {
+        const date = new Date(selectedProductionDate);
+        if (!isNaN(date.getTime())) {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          const sequential = '0001';
+          newBatch.lotCode = `${year}${month}${day}${sequential}`;
+          console.log('Generated new lotCode:', newBatch.lotCode);
+        }
+      }
+      
+      // อัพเดท lotDate ตามวันที่ผลิตใหม่ ในรูปแบบ "06 May 2025"
+      newBatch.lotDate = DateHelper.formatDate(selectedProductionDate);
+      console.log('Updated lotDate:', newBatch.lotDate);
+      
       console.log('Resyncing preview with new production date:', selectedProductionDate);
-      console.log('New best before date:', bestBefore);
       console.log('Updated batch data:', newBatch);
+      
+      // อัพเดท selectedBatch ด้วยข้อมูลใหม่
+      setSelectedBatch(newBatch);
       
       // ตรวจสอบว่าต้องเพิ่ม QRCode library หรือไม่
       if (generateQRCode && typeof window !== 'undefined' && !window.QRCode) {
@@ -1581,7 +1638,11 @@ const BatchSearch: React.FC = () => {
                           height: 50,
                           displayValue: true,
                           fontSize: 14,
-                          margin: 5
+                          margin: 5,
+                          font: 'monospace',
+                          textAlign: 'center',
+                          textPosition: 'bottom',
+                          textMargin: 2
                         });
                       });
                       
@@ -1673,9 +1734,12 @@ const BatchSearch: React.FC = () => {
           
           // เพิ่มฉลากพิเศษ (QC, Formula Sheet, Pallet Tag)
           specialLabels.forEach(labelType => {
+            // ใช้ข้อมูล selectedBatch ล่าสุดสำหรับฉลากพิเศษ
+            const specialLabelHtml = templatePreview || '';
+            
             printHTML += `
               <div class="label-container special-label" data-label-type="${labelType}">
-                ${templatePreview}
+                ${specialLabelHtml}
               </div>
             `;
           });
@@ -1762,6 +1826,8 @@ const BatchSearch: React.FC = () => {
       const itemKey = batch.itemKey || batch.productKey || '';
       const netWeight = batch.netWeight || '25.00';
       const processCell = batch.processCell || '1B';
+      
+      // ตรวจสอบและใช้ค่า lotCode และ lotDate จาก batch
       const lotCode = batch.lotCode || '';
       const lotDate = batch.lotDate || '';
       
@@ -1784,6 +1850,7 @@ const BatchSearch: React.FC = () => {
       const formattedBagNo = bagSequence.toString().padStart(2, '0');
       lineCode = `${lineCodeBase}${formattedBagNo}`;
       
+      // ใช้ค่า bestBeforeDate จาก batch โดยตรง
       const bestBeforeDate = batch.bestBeforeDate || '';
       const expiryDateCaption = batch.expiryDateCaption || 'BEST BEFORE';
       const soNumber = batch.soNumber || 'S2508217';
@@ -1886,7 +1953,11 @@ const BatchSearch: React.FC = () => {
                   height: 50,
                   displayValue: true,
                   fontSize: 14,
-                  margin: 5
+                  margin: 5,
+                  font: 'monospace',
+                  textAlign: 'center',
+                  textPosition: 'bottom',
+                  textMargin: 2
                 });
               }
             } catch(e) {
@@ -1985,7 +2056,11 @@ const BatchSearch: React.FC = () => {
                     height: 50,
                     displayValue: true,
                     fontSize: 14,
-                    margin: 5
+                    margin: 5,
+                    font: 'monospace',
+                    textAlign: 'center',
+                    textPosition: 'bottom',
+                    textMargin: 2
                   });
                 } catch(e) {
                   console.error("Error rendering barcode after load:", e);
@@ -2085,6 +2160,367 @@ const BatchSearch: React.FC = () => {
   useEffect(() => {
     setupQrScanner();
   }, []);
+
+  /* ------------------------------------------------------------------------ */
+  /* Helper - Create Elements From Preview                                        */
+  /* ------------------------------------------------------------------------ */
+  const createElementsFromPreview = () => {
+    if (!selectedBatch) return [];
+    
+    // สร้าง elements จากข้อมูล batch โดยใช้ template ที่เลือกอยู่ในปัจจุบัน
+    try {
+      const elements = [];
+      
+      // 1. ชื่อสินค้า (Product Name) - Top Center
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 0,
+        y: 10,
+        width: 400,
+        height: 20,
+        text: selectedBatch.productName || '',
+        fontSize: 18,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'center',
+        draggable: true,
+        visible: true
+      });
+      
+      // 2. Item Key ขนาดใหญ่ตรงกลาง
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 0,
+        y: 32,
+        width: 400,
+        height: 40,
+        text: selectedBatch.itemKey || selectedBatch.productKey || '',
+        fontSize: 32,
+        fontFamily: 'Arial',
+        fontWeight: 'bold',
+        fill: '#000000',
+        align: 'center',
+        draggable: true,
+        visible: true
+      });
+      
+      // 3. NET WEIGHT - Label
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 25,
+        y: 80,
+        width: 120,
+        height: 20,
+        text: 'NET WEIGHT',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 4. NET WEIGHT - Value with Process Cell
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 150,
+        y: 80,
+        width: 170,
+        height: 20,
+        text: `${selectedBatch.netWeight || '25.00'} KG/BAG ${selectedBatch.processCell || '1B'}`,
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 5. LOT CODE - Label
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 25,
+        y: 100,
+        width: 120,
+        height: 20,
+        text: 'LOT CODE',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 6. LOT DATE - Value
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 150,
+        y: 100,
+        width: 130,
+        height: 20,
+        text: selectedBatch.lotDate || '',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 7. BATCH NO - Value (Center)
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 250,
+        y: 100,
+        width: 80,
+        height: 20,
+        text: selectedBatch.batchNo || '',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'center',
+        draggable: true,
+        visible: true
+      });
+      
+      // 8. LINE CODE - Value (Right)
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 400 - 25 - 60,
+        y: 100,
+        width: 60,
+        height: 20,
+        text: selectedBatch.lineCode || 'P01B01',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'right',
+        draggable: true,
+        visible: true
+      });
+      
+      // 9. BEST BEFORE - Label
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 25,
+        y: 120,
+        width: 120,
+        height: 20,
+        text: selectedBatch.expiryDateCaption || 'BEST BEFORE',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 10. BEST BEFORE - Value
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 150,
+        y: 120,
+        width: 170,
+        height: 20,
+        text: selectedBatch.bestBeforeDate || '',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 11. SO NUMBER - Value (Right)
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 400 - 25 - 80,
+        y: 120,
+        width: 80,
+        height: 20,
+        text: selectedBatch.soNumber || 'S2508217',
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'right',
+        draggable: true,
+        visible: true
+      });
+      
+      // 12. ALLERGENS
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 25,
+        y: 140,
+        width: 350,
+        height: 20,
+        text: selectedBatch.allergensLabel?.startsWith('Allergens :') 
+          ? selectedBatch.allergensLabel 
+          : `Allergens : ${selectedBatch.allergensLabel || ''}`,
+        fontSize: 16,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 13. STORAGE CONDITION
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 25,
+        y: 160,
+        width: 350,
+        height: 20,
+        text: `Recommended Storage : ${selectedBatch.storageCondition || ''}`,
+        fontSize: 14,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'left',
+        draggable: true,
+        visible: true
+      });
+      
+      // 14. MANUFACTURER INFO - แยกเป็นหลายบรรทัด
+      if (selectedBatch.manufacturerInfo) {
+        // แยกข้อความตามบรรทัด
+        const lines = selectedBatch.manufacturerInfo.split('\n');
+        
+        // แสดงบรรทัดแรกพร้อมหัวข้อ - เป็นชื่อบริษัท
+        elements.push({
+          id: uuidv4(),
+          type: 'text',
+          x: 25,
+          y: 185,
+          width: 350,
+          height: 15,
+          text: lines[0] || '',
+          fontSize: 10,
+          fontFamily: 'Arial',
+          fill: '#000000',
+          align: 'left',
+          draggable: true,
+          visible: true
+        });
+        
+        // แสดงที่อยู่ในบรรทัดที่ 2
+        if (lines.length > 1) {
+          elements.push({
+            id: uuidv4(),
+            type: 'text',
+            x: 25,
+            y: 200,
+            width: 350,
+            height: 15,
+            text: lines[1] || '',
+            fontSize: 10,
+            fontFamily: 'Arial',
+            fill: '#000000',
+            align: 'left',
+            draggable: true,
+            visible: true
+          });
+        }
+        
+        // แสดงเบอร์โทรในบรรทัดที่ 3
+        if (lines.length > 2) {
+          elements.push({
+            id: uuidv4(),
+            type: 'text',
+            x: 25,
+            y: 215,
+            width: 350,
+            height: 15,
+            text: lines[2] || '',
+            fontSize: 10,
+            fontFamily: 'Arial',
+            fill: '#000000',
+            align: 'left',
+            draggable: true,
+            visible: true
+          });
+        }
+      }
+      
+      // 15. BARCODE - อยู่ตรงกลางด้านล่าง
+      elements.push({
+        id: uuidv4(),
+        type: 'barcode',
+        x: 50,
+        y: 235,
+        width: 300,
+        height: 70,
+        value: selectedBatch.batchNo || '',
+        format: 'CODE128',
+        fill: '#000000',
+        draggable: true,
+        visible: true
+      });
+      
+      // 16. PRINT DATE TIME - มุมขวาล่าง
+      const now = new Date();
+      const day = now.getDate().toString().padStart(2, '0');
+      const month = (now.getMonth() + 1).toString().padStart(2, '0');
+      const year = now.getFullYear().toString().slice(-2);
+      const hours = now.getHours();
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const hrs = (hours % 12 || 12).toString().padStart(2, '0');
+      
+      const printDateTime = `${day}${month}${year} ${hrs}:${minutes}${ampm}`;
+      
+      elements.push({
+        id: uuidv4(),
+        type: 'text',
+        x: 400 - 10,
+        y: 400 - 10,
+        width: 120,
+        height: 10,
+        text: printDateTime,
+        fontSize: 10,
+        fontFamily: 'Arial',
+        fill: '#000000',
+        align: 'right',
+        draggable: true,
+        visible: true
+      });
+      
+      // 17. QR CODE (ถ้าต้องการ) - มุมขวาบน
+      const qrValue = `BATCH:${selectedBatch.batchNo}\nPRODUCT:${selectedBatch.productName}\nLOT:${selectedBatch.lotCode}\nNET_WEIGHT:${selectedBatch.netWeight}\nBEST_BEFORE:${selectedBatch.bestBeforeDate}\nALLERGENS:${selectedBatch.allergensLabel}`;
+      
+      elements.push({
+        id: uuidv4(),
+        type: 'qr',
+        x: 400 - 5 - 90,
+        y: 5,
+        width: 90,
+        height: 90,
+        value: qrValue,
+        fill: '#000000',
+        draggable: true,
+        visible: true
+      });
+      
+      return elements;
+    } catch (error) {
+      console.error('Error creating elements from preview:', error);
+      return [];
+    }
+  };
 
   // เพิ่มส่วนแสดง QR popup ในส่วน return
   return (
@@ -2192,15 +2628,6 @@ const BatchSearch: React.FC = () => {
                     align: 'center',
                 render: (_, record) => (
                       <Space>
-                        <Tooltip title="Preview">
-                    <Button 
-                      icon={<EyeOutlined />}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePreviewLabel(record);
-                            }} 
-                          />
-                        </Tooltip>
                         <Tooltip title="Print">
                           <Button 
                             type="primary"
@@ -2227,17 +2654,6 @@ const BatchSearch: React.FC = () => {
           )}
         </Card>
       
-      {/* LabelPreview component */}
-      {selectedBatch && (
-        <LabelPreview
-          visible={previewVisible}
-          onClose={handleClosePreview}
-          batchNo={selectedBatch.batchNo}
-          bagNo={selectedBatch.bagNo}
-          templateId={selectedBatch.templateId}
-          apiEndpoint="/batches/preview"
-        />
-      )}
         
         {/* Print Preview Modal */}
         <Modal
@@ -2260,7 +2676,104 @@ const BatchSearch: React.FC = () => {
               icon={<EditOutlined />}
               onClick={() => {
                 if (selectedBatch?.templateId) {
-                  window.location.href = `/templates/designer/${selectedBatch.templateId}`;
+                  // กรณีมี templateId อยู่แล้ว 
+                  try {
+                    // สร้าง elements หากมีการแสดง preview อยู่แล้ว
+                    if (templatePreview) {
+                      // สร้าง object ที่มีข้อมูล template ในรูปแบบที่ TemplateDesigner เข้าใจ
+                      const elements = createElementsFromPreview();
+                      console.log('createElementsFromPreview สำหรับ templateId ที่มีอยู่แล้ว, elements:', elements);
+                      
+                      const template = {
+                        elements: elements,
+                        canvasSize: { width: 400, height: 400 }
+                      };
+                      
+                      // เก็บข้อมูล template ใน localStorage
+                      localStorage.setItem('batchSearchTemplate', JSON.stringify(template));
+                      console.log('เก็บข้อมูล template ใน localStorage เรียบร้อย ด้วย key: batchSearchTemplate สำหรับ templateId ที่มีอยู่แล้ว');
+                    }
+                    
+                    // นำทางไปยังหน้า designer พร้อมกับ templateId และบอกให้โหลดข้อมูล batch
+                    router.push({
+                      pathname: `/templates/designer/${selectedBatch.templateId}`,
+                      query: { 
+                        batchNo: selectedBatch.batchNo,
+                        syncBatch: 'true', // บอกให้ซิงค์ข้อมูล batch
+                        initialTemplate: 'true', // เพิ่ม parameter นี้เพื่อให้โหลด template จาก localStorage
+                        productKey: selectedBatch.productKey,
+                        customerKey: selectedBatch.custKey,
+                        showQR: generateQRCode ? 'true' : 'false' // ส่งค่า showQR ตามการตั้งค่า generateQRCode
+                      }
+                    });
+                  } catch (error) {
+                    console.error('Error preparing template with existing templateId:', error);
+                    message.error('เกิดข้อผิดพลาดในการเตรียมเทมเพลต');
+                  }
+                } else {
+                  // กรณีไม่มี templateId ให้สร้างเทมเพลตใหม่
+                  try {
+                    // เก็บข้อมูล batch ไว้ใน localStorage
+                    if (typeof window !== 'undefined' && selectedBatch) {
+                      // เก็บ batch number
+                      localStorage.setItem('tempBatchNo', selectedBatch.batchNo);
+                      
+                      // เก็บข้อมูลสำคัญอื่นๆ
+                      const batchDetails = {
+                        batchNo: selectedBatch.batchNo,
+                        productKey: selectedBatch.productKey || selectedBatch.itemKey,
+                        productName: selectedBatch.productName,
+                        customerKey: selectedBatch.custKey,
+                        netWeight: selectedBatch.netWeight,
+                        processCell: selectedBatch.processCell,
+                        lotCode: selectedBatch.lotCode,
+                        lotDate: selectedBatch.lotDate,
+                        bestBeforeDate: selectedBatch.bestBeforeDate,
+                        allergensLabel: selectedBatch.allergensLabel,
+                        storageCondition: selectedBatch.storageCondition,
+                        totalBags: selectedBatch.totalBags
+                      };
+                      localStorage.setItem('batchDetails', JSON.stringify(batchDetails));
+                      
+                      // สร้าง elements หากมีการแสดง preview อยู่แล้ว
+                      if (templatePreview) {
+                        // สร้าง object ที่มีข้อมูล template ในรูปแบบที่ TemplateDesigner เข้าใจ
+                        const elements = createElementsFromPreview();
+                        console.log('createElementsFromPreview ทำงาน, elements:', elements);
+                        
+                        const template = {
+                          elements: elements,
+                          canvasSize: { width: 400, height: 400 }
+                        };
+                        
+                        // เก็บข้อมูล template ใน localStorage
+                        localStorage.setItem('batchSearchTemplate', JSON.stringify(template));
+                        console.log('เก็บข้อมูล template ใน localStorage เรียบร้อย ด้วย key: batchSearchTemplate');
+                      } else {
+                        console.log('templatePreview ไม่มีข้อมูล, ไม่สามารถสร้าง elements ได้');
+                      }
+                      
+                      message.success('กำลังเปิดเครื่องมือสร้างเทมเพลต...');
+                      
+                      // นำทางไปยังหน้า designer พร้อมส่งพารามิเตอร์
+                      router.push({
+                        pathname: '/templates/designer',
+                        query: { 
+                          batchNo: selectedBatch.batchNo,
+                          syncBatch: 'true',
+                          initialTemplate: 'true',
+                          productKey: selectedBatch.productKey || selectedBatch.itemKey,
+                          customerKey: selectedBatch.custKey || '',
+                          showQR: generateQRCode ? 'true' : 'false' // ส่งค่า showQR ตามการตั้งค่า generateQRCode
+                        }
+                      });
+                    } else {
+                      message.info('ไม่สามารถสร้างเทมเพลตใหม่ได้');
+                    }
+                  } catch (error) {
+                    console.error('Error preparing template:', error);
+                    message.error('เกิดข้อผิดพลาดในการเตรียมเทมเพลต');
+                  }
                 }
               }}
             >
