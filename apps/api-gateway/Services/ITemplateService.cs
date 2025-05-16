@@ -9,5 +9,10 @@ namespace FgLabel.Api.Services
         Task<int> AutoCreateTemplateAsync(AutoCreateRequest request);
         Task<int> SaveTemplateAsync(CreateTemplateRequest request);
         Task<bool> DeleteTemplateAsync(int templateId);
+        
+        // เพิ่มเมธอดที่ถูกเรียกใช้ใน TemplateController
+        Task<TemplateDto> GetOrCreateByBatch(string batchNo);
+        Task<bool> UpdateTemplate(int templateId, TemplateUpdateDto dto);
+        Task<TemplateDto> GetTemplateById(int templateId);
     }
 }

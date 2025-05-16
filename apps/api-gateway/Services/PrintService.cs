@@ -398,8 +398,12 @@ namespace FgLabel.Api.Services
         /// <summary>
         /// บันทึก PDF ลงในฐานข้อมูลหรือไฟล์
         /// </summary>
-        private async Task SavePdfAsync(string batchNo, string bagNo, byte[] labelData)
+        private async Task SavePdfAsync(string? batchNo, string? bagNo, byte[] labelData)
         {
+            // กำหนดค่าเริ่มต้นถ้าเป็น null
+            batchNo = batchNo ?? "unknown_batch";
+            bagNo = bagNo ?? "unknown_bag";
+            
             // ตัวอย่างการบันทึกเป็นไฟล์ (สามารถเปลี่ยนเป็นบันทึกลงฐานข้อมูลได้)
             var outputDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "labels", batchNo);
             Directory.CreateDirectory(outputDir);

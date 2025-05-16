@@ -210,8 +210,11 @@ namespace FgLabel.Api.Integration.LabelRenderers
                     string tsplCommand = Encoding.ASCII.GetString(labelData);
                     
                     // แสดงข้อความบนหน้ากระดาษ (เฉพาะเพื่อการทดสอบ - ไม่ใช่การแปลง TSPL จริง)
-                    using var font = new Font("Consolas", 10);
-                    e.Graphics.DrawString(tsplCommand, font, Brushes.Black, e.PageBounds);
+                    if (e.Graphics != null)
+                    {
+                        using var font = new Font("Consolas", 10);
+                        e.Graphics.DrawString(tsplCommand, font, Brushes.Black, e.PageBounds);
+                    }
                 };
                 
                 printDoc.Print();

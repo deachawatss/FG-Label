@@ -11,7 +11,7 @@ namespace FgLabel.Api.Repositories;
 public interface ILabelTemplateRepository
 {
     Task<IEnumerable<LabelTemplateClass>> GetAllActiveTemplates();
-    Task<LabelTemplateClass> GetTemplateById(int id);
+    Task<LabelTemplateClass?> GetTemplateById(int id);
 }
 
 public class LabelTemplateRepository : ILabelTemplateRepository
@@ -32,7 +32,7 @@ public class LabelTemplateRepository : ILabelTemplateRepository
             "SELECT * FROM FgL.LabelTemplate WHERE Active = 1 ORDER BY TemplateID ASC");
     }
 
-    public async Task<LabelTemplateClass> GetTemplateById(int id)
+    public async Task<LabelTemplateClass?> GetTemplateById(int id)
     {
         return await _db.QuerySingleOrDefaultAsync<LabelTemplateClass>(
             "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @Id", 

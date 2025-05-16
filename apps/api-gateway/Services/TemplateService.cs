@@ -1114,7 +1114,7 @@ namespace FgLabel.Api.Services
         {
             try
             {
-                var sql = "UPDATE FgL.LabelTemplate SET IsActive = 0 WHERE TemplateID = @TemplateID";
+                var sql = "UPDATE FgL.LabelTemplate SET Active = 0 WHERE TemplateID = @TemplateID";
                 var result = await _sql.GetConnection().ExecuteAsync(sql, new { TemplateID = templateId });
                 return result > 0;
             }
@@ -1143,6 +1143,229 @@ namespace FgLabel.Api.Services
             {
                 _logger.LogError(ex, "เกิดข้อผิดพลาดในการตรวจสอบ stored procedure {ProcedureName}", procedureName);
                 return false;
+            }
+        }
+
+        // เพิ่มเมธอดที่ถูกเรียกใช้ใน TemplateController
+        public async Task<TemplateDto> GetOrCreateByBatch(string batchNo)
+        {
+            try
+            {
+                _logger.LogInformation("Getting or creating template for batch {BatchNo}", batchNo);
+                
+                // ดึงข้อมูล template ID จาก batch ที่ระบุ
+                var templateId = await GetMappingForBatchAsync(batchNo);
+                
+                if (templateId <= 0)
+                {
+                    _logger.LogWarning("No template found for batch {BatchNo}, creating new template", batchNo);
+                    // สร้าง template ใหม่อัตโนมัติ
+                    var request = new AutoCreateRequest { BatchNo = batchNo };
+                    templateId = await AutoCreateTemplateAsync(request);
+                }
+                
+                if (templateId <= 0)
+                {
+                    _logger.LogError("Failed to create template for batch {BatchNo}", batchNo);
+                    return null;
+                }
+                
+                // ดึงข้อมูล template
+                return await GetTemplateById(templateId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in GetOrCreateByBatch for batch {BatchNo}: {Message}", batchNo, ex.Message);
+                return null;
+            }
+        }
+        
+        public async Task<bool> UpdateTemplate(int templateId, TemplateUpdateDto dto)
+        {
+            try
+            {
+                _logger.LogInformation("Updating template {TemplateId}", templateId);
+                
+                // ตรวจสอบว่า template มีอยู่หรือไม่
+                var existingSql = "SELECT COUNT(1) FROM FgL.LabelTemplate WHERE TemplateID = @TemplateId AND Active = 1";
+                var exists = await _sql.GetConnection().ExecuteScalarAsync<int>(existingSql, new { TemplateId = templateId }) > 0;
+                
+                if (!exists)
+                {
+                    _logger.LogWarning("Template {TemplateId} not found or not active", templateId);
+                    return false;
+                }
+                
+                // อัพเดตข้อมูล template
+                var updateSql = @"
+                    UPDATE FgL.LabelTemplate
+                    SET Name = @Name,
+                        Description = @Description,
+                        ProductKey = @ProductKey,
+                        CustomerKey = @CustomerKey,
+                        Engine = @Engine,
+                        PaperSize = @PaperSize,
+                        Orientation = @Orientation,
+                        CustomWidth = @CustomWidth,
+                        CustomHeight = @CustomHeight,
+                        Content = @Content,
+                        UpdatedAt = GETUTCDATE()
+                    WHERE TemplateID = @TemplateId AND Active = 1";
+                
+                await _sql.GetConnection().ExecuteAsync(updateSql, new
+                {
+                    TemplateId = templateId,
+                    dto.Name,
+                    dto.Description,
+                    dto.ProductKey,
+                    dto.CustomerKey,
+                    dto.Engine,
+                    dto.PaperSize,
+                    dto.Orientation,
+                    dto.CustomWidth,
+                    dto.CustomHeight,
+                    dto.Content
+                });
+                
+                // อัพเดต components ถ้ามี
+                if (dto.Components != null && dto.Components.Any())
+                {
+                    // ลบ components เดิม
+                    var deleteSql = "DELETE FROM FgL.LabelTemplateComponent WHERE TemplateID = @TemplateId";
+                    await _sql.GetConnection().ExecuteAsync(deleteSql, new { TemplateId = templateId });
+                    
+                    // เพิ่ม components ใหม่
+                    var insertSql = @"
+                        INSERT INTO FgL.LabelTemplateComponent (
+                            TemplateID, ComponentType, X, Y, W, H, FontName, FontSize,
+                            FontWeight, FontStyle, Fill, Align, Placeholder, StaticText,
+                            BarcodeFormat, QrcodeFormat, ImageUrl, Layer, Visible,
+                            BorderWidth, BorderColor, BorderStyle, CreatedAt
+                        ) VALUES (
+                            @TemplateId, @ComponentType, @X, @Y, @W, @H, @FontName, @FontSize,
+                            @FontWeight, @FontStyle, @Fill, @Align, @Placeholder, @StaticText,
+                            @BarcodeFormat, @QrcodeFormat, @ImageUrl, @Layer, @Visible,
+                            @BorderWidth, @BorderColor, @BorderStyle, GETUTCDATE()
+                        )";
+                    
+                    foreach (var component in dto.Components)
+                    {
+                        await _sql.GetConnection().ExecuteAsync(insertSql, new
+                        {
+                            TemplateId = templateId,
+                            component.ComponentType,
+                            component.X,
+                            component.Y,
+                            component.W,
+                            component.H,
+                            component.FontName,
+                            component.FontSize,
+                            component.FontWeight,
+                            component.FontStyle,
+                            component.Fill,
+                            component.Align,
+                            component.Placeholder,
+                            component.StaticText,
+                            component.BarcodeFormat,
+                            component.QrcodeFormat,
+                            component.ImageUrl,
+                            component.Layer,
+                            component.Visible,
+                            component.BorderWidth,
+                            component.BorderColor,
+                            component.BorderStyle
+                        });
+                    }
+                }
+                
+                // อัพเดต mapping ด้วย
+                if (!string.IsNullOrEmpty(dto.ProductKey) || !string.IsNullOrEmpty(dto.CustomerKey))
+                {
+                    await UpdateTemplateMappingAsync(templateId, dto.ProductKey, dto.CustomerKey);
+                }
+                
+                _logger.LogInformation("Template {TemplateId} updated successfully", templateId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating template {TemplateId}: {Message}", templateId, ex.Message);
+                return false;
+            }
+        }
+        
+        public async Task<TemplateDto> GetTemplateById(int templateId)
+        {
+            try
+            {
+                _logger.LogInformation("Getting template {TemplateId}", templateId);
+                
+                // ดึงข้อมูล template
+                var templateSql = @"
+                    SELECT 
+                        TemplateID as Id,
+                        Name,
+                        Description,
+                        ProductKey,
+                        CustomerKey,
+                        Engine,
+                        PaperSize,
+                        Orientation,
+                        CustomWidth,
+                        CustomHeight,
+                        Content
+                    FROM FgL.LabelTemplate
+                    WHERE TemplateID = @TemplateId AND Active = 1";
+                
+                var template = await _sql.GetConnection().QueryFirstOrDefaultAsync<TemplateDto>(templateSql, new { TemplateId = templateId });
+                
+                if (template == null)
+                {
+                    _logger.LogWarning("Template {TemplateId} not found or not active", templateId);
+                    return null;
+                }
+                
+                // ดึงข้อมูล components
+                var componentsSql = @"
+                    SELECT 
+                        ComponentID as ComponentId,
+                        ComponentType,
+                        X, Y, W, H,
+                        FontName, FontSize, FontWeight, FontStyle,
+                        Fill, Align, Placeholder, StaticText,
+                        BarcodeFormat, QrcodeFormat, ImageUrl,
+                        Layer, Visible,
+                        BorderWidth, BorderColor, BorderStyle
+                    FROM FgL.LabelTemplateComponent
+                    WHERE TemplateID = @TemplateId
+                    ORDER BY Layer, ComponentID";
+                
+                var components = await _sql.GetConnection().QueryAsync<TemplateComponentDto>(componentsSql, new { TemplateId = templateId });
+                
+                if (components != null)
+                {
+                    template.Components = components.ToList();
+                }
+                
+                // ดึงข้อมูล settings
+                template.Settings = new TemplateSettingsDto
+                {
+                    Name = template.Name,
+                    Description = template.Description,
+                    Engine = template.Engine,
+                    PaperSize = template.PaperSize,
+                    Orientation = template.Orientation,
+                    CustomWidth = template.CustomWidth,
+                    CustomHeight = template.CustomHeight
+                };
+                
+                _logger.LogInformation("Template {TemplateId} retrieved successfully", templateId);
+                return template;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting template {TemplateId}: {Message}", templateId, ex.Message);
+                return null;
             }
         }
     }

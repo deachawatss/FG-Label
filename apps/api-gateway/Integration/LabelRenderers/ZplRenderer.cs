@@ -210,8 +210,11 @@ namespace FgLabel.Api.Integration.LabelRenderers
                     string zplCommand = Encoding.ASCII.GetString(labelData);
                     
                     // แสดงข้อความบนหน้ากระดาษ (เฉพาะเพื่อการทดสอบ - ไม่ใช่การแปลง ZPL จริง)
-                    using var font = new Font("Consolas", 10);
-                    e.Graphics.DrawString(zplCommand, font, Brushes.Black, e.PageBounds);
+                    if (e.Graphics != null)
+                    {
+                        using var font = new Font("Consolas", 10);
+                        e.Graphics.DrawString(zplCommand, font, Brushes.Black, e.PageBounds);
+                    }
                 };
                 
                 printDoc.Print();
