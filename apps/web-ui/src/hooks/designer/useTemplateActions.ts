@@ -36,28 +36,130 @@ export const useTemplateActions = () => {
       // ให้แต่ละ element มี z-index ที่แตกต่างกัน
       const elementsWithZIndex = elements.map((el, index) => ({
         ...el,
-        layer: el.layer || index
+        layer: el.layer || index * 10 // ใช้ช่วงที่กว้างขึ้นเพื่อให้มีช่องว่างระหว่าง layer
       }));
       
-      const contentWithZIndex = {
+      const contentObj = {
         elements: elementsWithZIndex,
         canvasSize
       };
       
-      const templateData = {
-        name: templateInfo.name || `Standard Template - ${batchNo || 'New'}`,
-        description: templateInfo.description || `Template created for batch ${batchNo || 'unknown'}`,
-        productKey: templateInfo.productKey || null,
-        customerKey: templateInfo.customerKey || null,
-        batchNo: batchNo || null, // เพิ่ม batchNo สำหรับการ link กับ batch
-        content: JSON.stringify(contentWithZIndex),
-        engine: 'Canvas',
-        paperSize: templateInfo.paperSize || 'Custom',
+      // แปลง content เป็น JSON string
+      const contentJson = JSON.stringify(contentObj);
+      
+      // ตรวจสอบขนาดของ content อย่าให้เกิน 8000 ตัวอักษร (เป็นขีดจำกัดของ SQL NVARCHAR(MAX))
+      // ถ้าเกินให้ทำการ compress หรือ truncate
+      let finalContent = contentJson;
+      if (contentJson.length > 8000) {
+        console.warn(`Content size (${contentJson.length}) exceeds recommended limit, applying compression...`);
+        // ลดรายละเอียดของ element ที่ไม่จำเป็น
+        const simplifiedElements = elementsWithZIndex.map(el => {
+          // เก็บเฉพาะข้อมูลที่จำเป็น
+          const essential = {
+            id: el.id,
+            type: el.type,
+            x: Math.round(el.x),
+            y: Math.round(el.y),
+            width: Math.round(el.width),
+            height: Math.round(el.height),
+            layer: el.layer
+          };
+          
+          // เพิ่มข้อมูลเฉพาะตาม type
+          if (el.type === 'text') {
+            return {
+              ...essential,
+              text: el.text,
+              fontSize: el.fontSize,
+              fontFamily: el.fontFamily,
+              fill: el.fill,
+              align: el.align
+            };
+          }
+          else if (el.type === 'barcode') {
+            return {
+              ...essential,
+              value: el.value,
+              format: el.format,
+              displayValue: el.displayValue
+            };
+          }
+          else if (el.type === 'qr') {
+            return {
+              ...essential,
+              value: el.value
+            };
+          }
+          else if (el.type === 'image') {
+            // สำหรับรูปภาพ ถ้ามี src เป็น data URL ที่ยาวมาก ให้ลบออก
+            // ลบ data URL src ออกเพื่อลดขนาด
+            return {
+              ...essential,
+              src: el.src?.startsWith('data:') ? '<data-url-removed>' : el.src
+            };
+          }
+          
+          return essential;
+        });
+        
+        // สร้าง content ใหม่ด้วย element ที่ลดรายละเอียดแล้ว
+        const compressedContent = {
+          elements: simplifiedElements,
+          canvasSize
+        };
+        
+        finalContent = JSON.stringify(compressedContent);
+      }
+      
+      // เตรียมข้อมูลตามโครงสร้างของตาราง LabelTemplate
+      const templateData: any = {
+        name: templateInfo.name || `Template-${batchNo || new Date().toISOString().slice(0, 10)}`,
+        description: templateInfo.description || '',
+        productKey: templateInfo.productKey || '',
+        customerKey: templateInfo.customerKey || '',
+        engine: 'Canvas', // ใช้ engine 'Canvas' สำหรับ designer ใหม่
+        paperSize: templateInfo.paperSize || '4x4',
+        orientation: templateInfo.orientation || 'Portrait',
+        templateType: templateInfo.templateType || 'INNER',
+        content: finalContent,
         customWidth: canvasSize.width,
         customHeight: canvasSize.height,
-        templateType: templateInfo.templateType || 'Standard',
-        orientation: templateInfo.orientation || 'Portrait'
+        active: true
       };
+      
+      // เตรียมข้อมูล components ตามโครงสร้างของตาราง LabelTemplateComponent
+      const components = elements.map(el => {
+        // สร้าง component ตามโครงสร้างในฐานข้อมูล
+        const component: any = {
+          componentType: el.type,
+          x: Math.round(el.x),
+          y: Math.round(el.y),
+          w: Math.round(el.width),
+          h: Math.round(el.height),
+          visible: el.visible !== false, // ถ้าไม่ได้กำหนด ให้เป็น true
+          layer: el.layer || 0
+        };
+        
+        // เพิ่มข้อมูลเฉพาะตาม type
+        if (el.type === 'text') {
+          component.fontName = el.fontFamily;
+          component.fontSize = el.fontSize;
+          component.fill = el.fill;
+          component.align = el.align;
+          component.staticText = el.text;
+        }
+        else if (el.type === 'barcode') {
+          component.barcodeFormat = el.format;
+          component.staticText = el.value;
+          component.placeholder = 'barcode';
+        }
+        else if (el.type === 'qr') {
+          component.staticText = el.value;
+          component.placeholder = 'qrcode';
+        }
+        
+        return component;
+      });
       
       // รับ token จาก localStorage
       const token = localStorage.getItem('token');
@@ -68,23 +170,53 @@ export const useTemplateActions = () => {
       // ตั้งค่า API URL ให้ถูกต้อง
       const apiUrl = getApiBaseUrl();
       
-      // ถ้ามี templateId แล้ว ให้ทำการอัปเดต
+      // เตรียม request data ที่จะส่งไป API
+      const requestData: any = {
+        ...templateData,
+        components: components
+      };
+      
+      // ถ้ามี templateId แล้ว ให้เพิ่มข้อมูลสำหรับการอัปเดต
       if (templateId) {
+        requestData.templateID = parseInt(templateId);
+        requestData.incrementVersion = true;
+        
         const response = await fetch(`${apiUrl}/templates/${templateId}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify(templateData),
+          body: JSON.stringify(requestData),
         });
         
         if (response.ok) {
+          const data = await response.json();
           message.success('บันทึกการแก้ไข template เรียบร้อยแล้ว');
           setLastSaved(new Date());
+          return data;
         } else {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || response.statusText);
+          // ถ้า PUT ไม่สำเร็จ ให้ลองใช้ POST แทน
+          console.warn('PUT request failed, trying POST with templateID...');
+          
+          const postResponse = await fetch(`${apiUrl}/templates`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(requestData),
+          });
+          
+          if (postResponse.ok) {
+            const data = await postResponse.json();
+            message.success('บันทึกการแก้ไข template เรียบร้อยแล้ว');
+            setLastSaved(new Date());
+            return data;
+          } else {
+            const errorData = await postResponse.json().catch(() => ({}));
+            throw new Error(errorData.message || postResponse.statusText);
+          }
         }
       } else {
         // สร้าง Template ใหม่
@@ -94,34 +226,42 @@ export const useTemplateActions = () => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify(templateData),
+          body: JSON.stringify(requestData),
         });
         
         if (response.ok) {
           const data = await response.json();
-          setTemplateId(data.templateId || data.id);
+          setTemplateId(data.templateID?.toString() || data.id?.toString());
           message.success('บันทึก template เรียบร้อยแล้ว');
           setLastSaved(new Date());
           
-          // เปลี่ยน URL หากมีการใช้ router และเป็นการสร้างใหม่
-          if (router && data.templateId) {
-            router.push(`/templates/designer/${data.templateId || data.id}`);
+          // ในกรณีที่มีการระบุ productKey และ customerKey ให้เพิ่มข้อมูลไปยังตาราง mapping
+          if (templateInfo.productKey || templateInfo.customerKey) {
+            try {
+              // ไม่ต้องเรียกใช้งาน API แยกต่างหากสำหรับการทำ mapping
+              // เนื่องจาก API /api/templates จะจัดการเรื่องนี้ให้อัตโนมัติโดยใช้ 
+              // stored procedure FgL.UpdateTemplateMappingWithStringKeys
+              console.log('Template mapping will be handled automatically by the API');
+            } catch (mappingError) {
+              console.error('Error in template mapping logic:', mappingError);
+              // ไม่ throw error เนื่องจากไม่ใช่ข้อผิดพลาดสำคัญที่ควรทำให้การบันทึก template ล้มเหลว
+            }
           }
+          
+          return data;
         } else {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.message || response.statusText);
         }
       }
-      
-      return true;
     } catch (error: any) {
       console.error('เกิดข้อผิดพลาดในการบันทึก template:', error);
-      message.error(`เกิดข้อผิดพลาดในการบันทึก template: ${error.message}`);
-      return false;
+      message.error(`บันทึก template ไม่สำเร็จ: ${error.message}`);
+      return null;
     } finally {
       setIsSaving(false);
     }
-  }, [templateId, router]);
+  }, [templateId, getApiBaseUrl]);
 
   /**
    * โหลดเทมเพลตจาก API

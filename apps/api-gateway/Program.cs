@@ -1369,6 +1369,7 @@ public class Program
                 var description = template.TryGetProperty("description", out var descProp) ? descProp.GetString() : null;
                 var engine = template.TryGetProperty("engine", out var engineProp) ? engineProp.GetString() : "html";
                 var paperSize = template.TryGetProperty("paperSize", out var paperSizeProp) ? paperSizeProp.GetString() : "4X4";
+                var orientation = template.TryGetProperty("orientation", out var oriProp) ? oriProp.GetString() : null;
                 var productKey = template.TryGetProperty("productKey", out var prodKeyProp) ? prodKeyProp.GetString() : null;
                 var customerKey = template.TryGetProperty("customerKey", out var custKeyProp) ? custKeyProp.GetString() : null;
                 var content = template.TryGetProperty("content", out var contentProp) ? contentProp.GetString() : null;
@@ -1430,7 +1431,7 @@ public class Program
                             Description = description,
                             Engine = engine,
                             PaperSize = paperSize,
-                            Orientation = template.TryGetProperty("orientation", out var oriProp) ? oriProp.GetString() : null,
+                            Orientation = orientation,
                             Content = content,
                             ProductKey = productKey,
                             CustomerKey = customerKey,
@@ -1440,6 +1441,26 @@ public class Program
                     
                     logger.LogInformation("Updated template ID {TemplateID}, version {Version}", (object)templateID, (object)newVersion);
                     
+                    // อัปเดต mapping ใน table mapping ด้วย stored procedure
+                    try
+                    {
+                        await db.ExecuteAsync(
+                            "FgL.UpdateTemplateMappingWithStringKeys", 
+                            new { 
+                                TemplateID = templateID,
+                                ProductKey = productKey,
+                                CustomerKey = customerKey
+                            },
+                            commandType: System.Data.CommandType.StoredProcedure);
+                        
+                        logger.LogInformation("Updated template mapping for template ID {TemplateID}", (object)templateID);
+                    }
+                    catch (Exception ex)
+                    {
+                        // บันทึก error แต่ไม่หยุดการทำงาน เนื่องจากการอัปเดต template สำเร็จแล้ว
+                        logger.LogWarning(ex, "Error updating template mapping for ID {TemplateID}, but template update succeeded", (object)templateID);
+                    }
+                    
                     return Results.Ok(result);
                 }
                 else
@@ -1448,27 +1469,15 @@ public class Program
                     var insertSql = @"
                         INSERT INTO FgL.LabelTemplate (
                             Name, Description, ProductKey, CustomerKey, 
-                            Engine, PaperSize, Content, Version,
-                            CreatedAt, UpdatedAt
+                            Engine, PaperSize, Orientation, Content, Version,
+                            CreatedAt, UpdatedAt, Active
                         ) VALUES (
                             @Name, @Description, @ProductKey, @CustomerKey,
-                            @Engine, @PaperSize, @Content, 1,
-                            GETDATE(), GETDATE()
+                            @Engine, @PaperSize, @Orientation, @Content, 1,
+                            GETDATE(), GETDATE(), 1
                         );
                         
-                        DECLARE @TemplateID INT = SCOPE_IDENTITY();
-                        
-                        -- Insert mapping if product or customer key is specified
-                        IF @ProductKey IS NOT NULL OR @CustomerKey IS NOT NULL
-                        BEGIN
-                            INSERT INTO FgL.LabelTemplateMapping (
-                                TemplateID, ProductKey, CustomerKey, IsActive, CreatedAt
-                            ) VALUES (
-                                @TemplateID, @ProductKey, @CustomerKey, 1, GETDATE()
-                            );
-                        END
-                        
-                        SELECT @TemplateID AS TemplateID, 1 AS Version;";
+                        SELECT SCOPE_IDENTITY() AS TemplateID, 1 AS Version;";
                         
                     var result = await db.QueryFirstAsync<dynamic>(insertSql, new
                     {
@@ -1478,12 +1487,34 @@ public class Program
                         CustomerKey = customerKey,
                         Engine = engine,
                         PaperSize = paperSize,
+                        Orientation = orientation,
                         Content = content
                     });
                     
-                    logger.LogInformation("Created new template ID {TemplateID}", (object)result.TemplateID);
+                    var newTemplateId = (int)result.TemplateID;
+                    logger.LogInformation("Created new template ID {TemplateID}", (object)newTemplateId);
                     
-                    return Results.Created($"/api/templates/{result.TemplateID}", result);
+                    // อัปเดต mapping ใน table mapping ด้วย stored procedure
+                    try
+                    {
+                        await db.ExecuteAsync(
+                            "FgL.UpdateTemplateMappingWithStringKeys", 
+                            new { 
+                                TemplateID = newTemplateId,
+                                ProductKey = productKey,
+                                CustomerKey = customerKey
+                            },
+                            commandType: System.Data.CommandType.StoredProcedure);
+                        
+                        logger.LogInformation("Created template mapping for template ID {TemplateID}", (object)newTemplateId);
+                    }
+                    catch (Exception ex)
+                    {
+                        // บันทึก error แต่ไม่หยุดการทำงาน เนื่องจากการสร้าง template สำเร็จแล้ว
+                        logger.LogWarning(ex, "Error creating template mapping for ID {TemplateID}, but template creation succeeded", (object)newTemplateId);
+                    }
+                    
+                    return Results.Created($"/api/templates/{newTemplateId}", result);
                 }
             }
             catch (Exception ex)
@@ -1579,6 +1610,42 @@ public class Program
                 logger.LogError(ex, "Error retrieving printer with ID {Id}: {Message}", id, ex.Message);
                 return Results.Problem(
                     title: "Error retrieving printer",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
+            }
+        }).RequireAuthorization();
+
+        // GET /templates/lookup - ค้นหา template จาก productKey และ customerKey
+        app.MapGet("/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, ILogger<Program> logger) =>
+        {
+            if (string.IsNullOrEmpty(productKey) && string.IsNullOrEmpty(customerKey))
+            {
+                return Results.BadRequest(new { message = "At least one of productKey or customerKey must be provided" });
+            }
+            
+            try
+            {
+                // เรียกใช้ stored procedure ค้นหา template โดยใช้ productKey และ customerKey
+                var result = await connection.QueryFirstOrDefaultAsync<dynamic>(
+                    "FgL.GetTemplateByProductAndCustomerKeys",
+                    new { productKey, customerKey },
+                    commandType: System.Data.CommandType.StoredProcedure
+                );
+                
+                // ถ้าไม่พบ template จะได้ result ที่มีค่า templateID เป็น null
+                if (result == null || result.TemplateID == null)
+                {
+                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                }
+                
+                return Results.Ok(new { templateID = result.TemplateID });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error looking up template by product and customer keys");
+                return Results.Problem(
+                    title: "Error looking up template",
                     detail: ex.Message,
                     statusCode: 500
                 );

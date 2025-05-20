@@ -1,10 +1,10 @@
 /*============================================================================== 
-  FG‑Label Database Schema Installation Script (FULL REBUILD) 
+  FG‑Label Database Schema Installation Script (FULL REBUILD) 
   Database : TFCPILOT2 
-  Version  : 2.6‑revI8 – 16‑May‑2025 02:30
+  Version  : 2.6‑revI8 – 16‑May‑2025 02:30
   Purpose  : • รื้อ‑ติดตั้งสเคมาชุด FG‑Label ครบทุกตาราง / ฟังก์ชัน / วิว / โปรซีเยอร์
-             • แก้ลำดับ DROP‑ORDER, ลบ FOREIGN KEY อัตโนมัติ, ไม่มีโค้ดซ้ำ, ไม่มี placeholder
-             • ฟังก์ชัน Bag‑helpers, VIEW สรุปต่อ batch, TVF แยก bag‑level
+             • แก้ลำดับ DROP‑ORDER, ลบ FOREIGN KEY อัตโนมัติ, ไม่มีโค้ดซ้ำ, ไม่มี placeholder
+             • ฟังก์ชัน Bag‑helpers, VIEW สรุปต่อ batch, TVF แยก bag‑level
              • ไม่มีคอลัมน์ CREATED_DATE / CHECKDATE (ลดปัญหาซิงก์วันที่)
 ==============================================================================*/
 
@@ -20,7 +20,7 @@ PRINT N'★ 0) Schema FgL ready';
 GO
 
 /*---------------------------------------------------------------------------  
-  1) DROP FOREIGN‑KEY ที่อ้างตระกูล FgL.* ก่อน  
+  1) DROP FOREIGN‑KEY ที่อ้างตระกูล FgL.* ก่อน  
 ---------------------------------------------------------------------------*/
 DECLARE @DropFK NVARCHAR(MAX) = N'';
 SELECT @DropFK += N'ALTER TABLE '
@@ -34,7 +34,7 @@ PRINT N'★ 1) All FK to FgL.* dropped';
 GO
 
 /*---------------------------------------------------------------------------  
-  2) DROP OBJECTS (Child‑ก่อน‑Parent, ตรวจ IF EXISTS ทุกตัว)  
+  2) DROP OBJECTS (Child‑ก่อน‑Parent, ตรวจ IF EXISTS ทุกตัว)  
 ---------------------------------------------------------------------------*/
 IF OBJECT_ID('FgL.LabelTemplateComponent' ,'U') IS NOT NULL DROP TABLE FgL.LabelTemplateComponent;
 IF OBJECT_ID('FgL.LabelTemplateMapping'  ,'U') IS NOT NULL DROP TABLE FgL.LabelTemplateMapping;
@@ -634,7 +634,7 @@ GO
 /*---------------------------------------------------------------------------  
  18) FINISHED  
 ---------------------------------------------------------------------------*/
-PRINT N'✅  FG‑Label schema rev I8 installed successfully';
+PRINT N'✅  FG‑Label schema rev I8 installed successfully';
 
 
 
@@ -742,81 +742,99 @@ GO
 /*---------------------------------------------------------------------------  
   4) สร้าง Stored Procedure สำหรับค้นหา template ด้วย ProductKey และ CustomerKey ที่เป็น string
 ---------------------------------------------------------------------------*/
+PRINT N'★ Creating procedure FgL.GetTemplateByProductAndCustomerKeys';
+GO
+
+IF OBJECT_ID('FgL.GetTemplateByProductAndCustomerKeys', 'P') IS NOT NULL
+    DROP PROCEDURE FgL.GetTemplateByProductAndCustomerKeys;
+GO
+
 CREATE PROCEDURE FgL.GetTemplateByProductAndCustomerKeys
-    @ProductKey NVARCHAR(50),
-    @CustomerKey NVARCHAR(50) = NULL
+    @productKey NVARCHAR(200),
+    @customerKey NVARCHAR(200) = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
+    
     DECLARE @TemplateID INT = NULL;
-
-    -- 1. ค้นหาจากตาราง mapping สำหรับคู่ ProductKey และ CustomerKey ก่อน
-    IF @CustomerKey IS NOT NULL
+    
+    -- ถ้ามีทั้ง productKey และ customerKey ลองหา template จากทั้งคู่ก่อน
+    IF @productKey IS NOT NULL AND @customerKey IS NOT NULL
     BEGIN
-        SELECT TOP 1 @TemplateID = TemplateID
-        FROM FgL.TemplateMappingProductCustomerString
-        WHERE ProductKeyString = @ProductKey
-          AND CustomerKeyString = @CustomerKey
-          AND Active = 1
-        ORDER BY ID DESC;
-    END
-
-    -- 2. ถ้าไม่พบ ค้นหาจากตาราง mapping สำหรับ ProductKey อย่างเดียว
-    IF @TemplateID IS NULL
-    BEGIN
-        SELECT TOP 1 @TemplateID = TemplateID
-        FROM FgL.TemplateMappingProductString
-        WHERE ProductKeyString = @ProductKey
-          AND Active = 1
-        ORDER BY ID DESC;
-    END
-
-    -- 3. ถ้าไม่พบ และมี CustomerKey ค้นหาจากตาราง mapping สำหรับ CustomerKey อย่างเดียว
-    IF @TemplateID IS NULL AND @CustomerKey IS NOT NULL
-    BEGIN
-        SELECT TOP 1 @TemplateID = TemplateID
-        FROM FgL.TemplateMappingCustomerString
-        WHERE CustomerKeyString = @CustomerKey
-          AND Active = 1
-        ORDER BY ID DESC;
-    END
-
-    -- 4. ถ้าไม่พบในตาราง mapping ใหม่ ลองค้นหาจากตาราง LabelTemplate แบบเดิม
-    IF @TemplateID IS NULL
-    BEGIN
-        -- ค้นหาตาม Product+Customer ก่อน (เฉพาะ)
-        SELECT TOP 1 @TemplateID = TemplateID
-        FROM FgL.LabelTemplate
-        WHERE ProductKey = @ProductKey
-          AND CustomerKey = @CustomerKey
-          AND Active = 1
-        ORDER BY TemplateID DESC;
-
-        -- ถ้าไม่พบ ค้นหาตาม Product อย่างเดียว
+        -- ลองหาจาก exact match ทั้ง product และ customer ก่อน
+        SELECT TOP 1 @TemplateID = T.TemplateID
+        FROM FgL.LabelTemplate T
+        WHERE T.ProductKey = @productKey
+          AND T.CustomerKey = @customerKey
+          AND T.Active = 1
+        ORDER BY T.CreatedAt DESC;
+        
+        -- ถ้าไม่พบ แสดงว่าจะลองค้นหาจากตารางแมปปิ้งที่เป็นแบบ String match
         IF @TemplateID IS NULL
         BEGIN
-            SELECT TOP 1 @TemplateID = TemplateID
-            FROM FgL.LabelTemplate
-            WHERE ProductKey = @ProductKey
-              AND (CustomerKey IS NULL OR CustomerKey = '')
-              AND Active = 1
-            ORDER BY TemplateID DESC;
-        END
-
-        -- ถ้าไม่พบ และมี CustomerKey ค้นหาตาม Customer อย่างเดียว
-        IF @TemplateID IS NULL AND @CustomerKey IS NOT NULL
+            SELECT TOP 1 @TemplateID = M.TemplateID
+            FROM FgL.TemplateMappingProductCustomerString M
+            WHERE @productKey LIKE M.ProductKeyString
+              AND @customerKey LIKE M.CustomerKeyString
+              AND M.Active = 1
+            ORDER BY M.CreatedAt DESC;
+        END;
+    END;
+    
+    -- ถ้ายังไม่พบและมี productKey ให้ลองค้นหาแค่จาก productKey
+    IF @TemplateID IS NULL AND @productKey IS NOT NULL
+    BEGIN
+        -- ลองหาจาก LabelTemplate โดยตรง
+        SELECT TOP 1 @TemplateID = T.TemplateID
+        FROM FgL.LabelTemplate T
+        WHERE T.ProductKey = @productKey
+          AND (T.CustomerKey IS NULL OR T.CustomerKey = '')
+          AND T.Active = 1
+        ORDER BY T.CreatedAt DESC;
+        
+        -- ถ้าไม่พบ ลองหาจากตารางแมปปิ้ง
+        IF @TemplateID IS NULL
         BEGIN
-            SELECT TOP 1 @TemplateID = TemplateID
-            FROM FgL.LabelTemplate
-            WHERE CustomerKey = @CustomerKey
-              AND (ProductKey IS NULL OR ProductKey = '')
-              AND Active = 1
-            ORDER BY TemplateID DESC;
-        END
+            SELECT TOP 1 @TemplateID = M.TemplateID
+            FROM FgL.TemplateMappingProductString M
+            WHERE @productKey LIKE M.ProductKeyString
+              AND M.Active = 1
+            ORDER BY M.CreatedAt DESC;
+        END;
+    END;
+    
+    -- ถ้ายังไม่พบและมี customerKey ให้ลองค้นหาแค่จาก customerKey
+    IF @TemplateID IS NULL AND @customerKey IS NOT NULL
+    BEGIN
+        -- ลองหาจาก LabelTemplate โดยตรง
+        SELECT TOP 1 @TemplateID = T.TemplateID
+        FROM FgL.LabelTemplate T
+        WHERE T.CustomerKey = @customerKey
+          AND (T.ProductKey IS NULL OR T.ProductKey = '')
+          AND T.Active = 1
+        ORDER BY T.CreatedAt DESC;
+        
+        -- ถ้าไม่พบ ลองหาจากตารางแมปปิ้ง
+        IF @TemplateID IS NULL
+        BEGIN
+            SELECT TOP 1 @TemplateID = M.TemplateID
+            FROM FgL.TemplateMappingCustomerString M
+            WHERE @customerKey LIKE M.CustomerKeyString
+              AND M.Active = 1
+            ORDER BY M.CreatedAt DESC;
+        END;
+    END;
+    
+    -- ส่งผลลัพธ์
+    IF @TemplateID IS NOT NULL
+    BEGIN
+        SELECT @TemplateID AS TemplateID;
     END
-
-    -- คืนค่า TemplateID ที่พบ (หรือ NULL ถ้าไม่พบ)
-    SELECT @TemplateID AS TemplateID;
+    ELSE
+    BEGIN
+        -- ไม่พบ Template ที่ตรงกับเงื่อนไข
+        SELECT NULL AS TemplateID;
+    END;
 END;
 GO
 PRINT N'✓ Stored Procedure FgL.GetTemplateByProductAndCustomerKeys สร้างเรียบร้อยแล้ว';
@@ -885,3 +903,152 @@ GO
 
 PRINT N'✅ การติดตั้งตาราง mapping สำหรับ string keys เสร็จสมบูรณ์';
 GO
+
+-- ปรับปรุง Stored Procedure สำหรับการอัพเดต template mapping
+-- ปรับให้รองรับการทำให้ templates เดิมที่มี productKey และ customerKey เดียวกันเป็น inactive ก่อนสร้าง mapping ใหม่
+IF OBJECT_ID('FgL.UpdateTemplateMappingWithStringKeys', 'P') IS NOT NULL
+    DROP PROCEDURE FgL.UpdateTemplateMappingWithStringKeys;
+GO
+
+CREATE PROCEDURE FgL.UpdateTemplateMappingWithStringKeys
+    @TemplateID INT,
+    @ProductKey NVARCHAR(50) = NULL,
+    @CustomerKey NVARCHAR(50) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- ลบ mapping เก่าของ template นี้ (ทำเป็น inactive)
+    UPDATE FgL.TemplateMappingProductString
+    SET Active = 0
+    WHERE TemplateID = @TemplateID;
+    
+    UPDATE FgL.TemplateMappingCustomerString
+    SET Active = 0
+    WHERE TemplateID = @TemplateID;
+    
+    UPDATE FgL.TemplateMappingProductCustomerString
+    SET Active = 0
+    WHERE TemplateID = @TemplateID;
+    
+    -- ถ้ามีทั้ง ProductKey และ CustomerKey ทำให้ templates อื่นที่มี ProductKey+CustomerKey เดียวกันเป็น inactive
+    IF @ProductKey IS NOT NULL AND @ProductKey <> '' AND @ProductKey <> 'system' AND 
+       @CustomerKey IS NOT NULL AND @CustomerKey <> '' AND @CustomerKey <> 'system'
+    BEGIN
+        -- 1. หา templates ทั้งหมดที่มี ProductKey+CustomerKey เดียวกัน
+        DECLARE @OtherTemplateIds TABLE (TemplateID INT);
+        
+        -- จากตาราง TemplateMappingProductCustomerString
+        INSERT INTO @OtherTemplateIds (TemplateID)
+        SELECT DISTINCT TemplateID 
+        FROM FgL.TemplateMappingProductCustomerString
+        WHERE ProductKeyString = @ProductKey
+          AND CustomerKeyString = @CustomerKey
+          AND Active = 1
+          AND TemplateID <> @TemplateID;
+        
+        -- จากตาราง LabelTemplate
+        INSERT INTO @OtherTemplateIds (TemplateID)
+        SELECT DISTINCT TemplateID
+        FROM FgL.LabelTemplate
+        WHERE ProductKey = @ProductKey
+          AND CustomerKey = @CustomerKey
+          AND Active = 1
+          AND TemplateID <> @TemplateID
+          AND TemplateID NOT IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        -- 2. ทำให้ templates เหล่านี้ inactive
+        -- ในตาราง mapping
+        UPDATE FgL.TemplateMappingProductString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        UPDATE FgL.TemplateMappingCustomerString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        UPDATE FgL.TemplateMappingProductCustomerString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        -- ในตาราง LabelTemplate
+        UPDATE FgL.LabelTemplate
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+    END
+    
+    -- ถ้ามีแค่ ProductKey ทำให้ templates อื่นที่มีแค่ ProductKey เดียวกันเป็น inactive
+    ELSE IF @ProductKey IS NOT NULL AND @ProductKey <> '' AND @ProductKey <> 'system'
+    BEGIN
+        -- 1. หา templates ทั้งหมดที่มี ProductKey เดียวกัน (และไม่มี CustomerKey)
+        DECLARE @OtherProductTemplateIds TABLE (TemplateID INT);
+        
+        -- จากตาราง TemplateMappingProductString
+        INSERT INTO @OtherProductTemplateIds (TemplateID)
+        SELECT DISTINCT tmps.TemplateID 
+        FROM FgL.TemplateMappingProductString tmps
+        LEFT JOIN FgL.TemplateMappingProductCustomerString tmpcs
+            ON tmps.TemplateID = tmpcs.TemplateID AND tmpcs.Active = 1
+        WHERE tmps.ProductKeyString = @ProductKey
+          AND tmps.Active = 1
+          AND tmps.TemplateID <> @TemplateID
+          AND tmpcs.TemplateID IS NULL;  -- ไม่มี CustomerKey mapping
+        
+        -- จากตาราง LabelTemplate
+        INSERT INTO @OtherProductTemplateIds (TemplateID)
+        SELECT DISTINCT TemplateID
+        FROM FgL.LabelTemplate
+        WHERE ProductKey = @ProductKey
+          AND (CustomerKey IS NULL OR CustomerKey = '' OR CustomerKey = 'system')
+          AND Active = 1
+          AND TemplateID <> @TemplateID
+          AND TemplateID NOT IN (SELECT TemplateID FROM @OtherProductTemplateIds);
+        
+        -- 2. ทำให้ templates เหล่านี้ inactive
+        UPDATE FgL.TemplateMappingProductString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherProductTemplateIds);
+        
+        UPDATE FgL.LabelTemplate
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherProductTemplateIds);
+    END
+    
+    -- เพิ่ม mapping ใหม่
+    IF @ProductKey IS NOT NULL AND @ProductKey <> '' AND @ProductKey <> 'system'
+    BEGIN
+        -- เพิ่ม mapping สำหรับ ProductKey
+        INSERT INTO FgL.TemplateMappingProductString (TemplateID, ProductKeyString)
+        VALUES (@TemplateID, @ProductKey);
+        
+        -- ถ้ามี CustomerKey ด้วย เพิ่ม mapping สำหรับคู่ ProductKey และ CustomerKey
+        IF @CustomerKey IS NOT NULL AND @CustomerKey <> '' AND @CustomerKey <> 'system'
+        BEGIN
+            INSERT INTO FgL.TemplateMappingProductCustomerString (TemplateID, ProductKeyString, CustomerKeyString)
+            VALUES (@TemplateID, @ProductKey, @CustomerKey);
+        END
+    END
+    
+    -- ถ้ามีแค่ CustomerKey เพิ่ม mapping สำหรับ CustomerKey
+    IF (@ProductKey IS NULL OR @ProductKey = '' OR @ProductKey = 'system')
+       AND @CustomerKey IS NOT NULL AND @CustomerKey <> '' AND @CustomerKey <> 'system'
+    BEGIN
+        INSERT INTO FgL.TemplateMappingCustomerString (TemplateID, CustomerKeyString)
+        VALUES (@TemplateID, @CustomerKey);
+    END
+    
+    -- อัพเดตข้อมูลในตาราง LabelTemplate ด้วย
+    UPDATE FgL.LabelTemplate
+    SET ProductKey = CASE WHEN @ProductKey = 'system' THEN NULL ELSE @ProductKey END,
+        CustomerKey = CASE WHEN @CustomerKey = 'system' THEN NULL ELSE @CustomerKey END,
+        UpdatedAt = GETDATE(),
+        Active = 1
+    WHERE TemplateID = @TemplateID;
+    
+    -- คืนค่า TemplateID ที่อัพเดต
+    SELECT @TemplateID AS TemplateID;
+END;
+GO
+
+PRINT N'✓ Stored Procedure FgL.UpdateTemplateMappingWithStringKeys อัปเดตเรียบร้อยแล้ว';
+GO 

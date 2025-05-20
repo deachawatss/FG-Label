@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Print Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    .print-button {
+      padding: 10px 20px;
+      background-color: #5D4037;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-bottom: 20px;
+    }
+    .print-frame {
+      border: 1px solid #ccc;
+      padding: 10px;
+      width: 400px;
+      height: 400px;
+      position: relative;
+    }
+    @media print {
+      .no-print {
+        display: none;
+      }
+    }
+  </style>
+  <!-- เพิ่ม JsBarcode -->
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+  <!-- เพิ่ม QRCode library -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.0/build/qrcode.min.js"></script>
+</head>
+<body>
+  <div class="no-print">
+    <h1>Test Print for FG Label</h1>
+    <p>Click the button below to test print functionality:</p>
+    <button class="print-button" id="printButton">Print</button>
+  </div>
+  
+  <div class="print-frame" id="printArea">
+    <h2 style="text-align: center;">Sample Label</h2>
+    <p><strong>Batch No:</strong> B12345</p>
+    <p><strong>Product:</strong> Test Product</p>
+    <p><strong>Net Weight:</strong> 25 KG/BAG</p>
+    
+    <!-- Barcode -->
+    <div style="text-align: center; margin: 20px 0;">
+      <svg id="barcode" width="200" height="70"></svg>
+    </div>
+    
+    <!-- QR Code -->
+    <div style="position: absolute; top: 10px; right: 10px;">
+      <canvas id="qrcode" width="80" height="80" data-qr-value="BATCH:B12345\nPRODUCT:Test Product\nLOT:L12345\nNET_WEIGHT:25KG\nBEST_BEFORE:2024-12-31"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // Initialize barcode
+    JsBarcode("#barcode", "B12345", {
+      format: "CODE128",
+      width: 2,
+      height: 50,
+      displayValue: true,
+      fontSize: 14,
+      fontFamily: 'monospace',
+      textAlign: 'center',
+      textPosition: 'bottom',
+      textMargin: 2,
+      margin: 5
+    });
+    
+    // Initialize QR code
+    const qrElement = document.getElementById("qrcode");
+    const qrValue = qrElement.getAttribute('data-qr-value');
+    QRCode.toCanvas(qrElement, qrValue, {
+      width: 80,
+      margin: 1
+    });
+    
+    // Print button event
+    document.getElementById('printButton').addEventListener('click', function() {
+      window.print();
+    });
+  </script>
+</body>
+</html> 

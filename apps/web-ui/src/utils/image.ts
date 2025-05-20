@@ -16,7 +16,7 @@ export const compressImageDataUrl = async (dataUrl: string, quality = 0.7): Prom
       
       // Calculate new size (reduced by 30%)
       let { width, height } = img;
-      let scale = quality * 1.0;
+      const scale = quality * 1.0;
       
       width = Math.floor(width * scale);
       height = Math.floor(height * scale);

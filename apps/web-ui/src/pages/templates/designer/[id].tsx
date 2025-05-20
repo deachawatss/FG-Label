@@ -48,11 +48,6 @@ export default function EditTemplate() {
             const templateData = JSON.parse(savedTemplate);
             console.log('Template loaded from localStorage successfully:', templateData);
             
-            // ตรวจสอบว่ามี elements หรือไม่
-            if (templateData.elements && Array.isArray(templateData.elements)) {
-              console.log(`Found ${templateData.elements.length} elements in localStorage template`);
-            }
-            
             setLocalStorageTemplate(templateData);
           } else {
             console.warn('No template data found in localStorage with key: batchSearchTemplate');
@@ -64,6 +59,7 @@ export default function EditTemplate() {
     }
   }, [isReady, isClient, router.query]);
 
+  // ฟังก์ชันโหลด template จาก API
   const fetchTemplate = async (templateId: string) => {
     if (!templateId) {
       setError('ไม่พบ Template ID');
@@ -92,22 +88,36 @@ export default function EditTemplate() {
       const data = await res.json();
       console.log('Template data:', data);
 
-      // ถ้ามีข้อมูลจาก localStorage ให้ใช้ elements จาก localStorage แทน
+      // ถ้ามีข้อมูลจาก localStorage จะใช้ข้อมูลนั้นแทน
       if (localStorageTemplate && localStorageTemplate.elements) {
         console.log('Using elements from localStorage instead of API data');
         
-        // สร้าง template data ใหม่โดยใช้ข้อมูลพื้นฐานจาก API แต่ใช้ elements จาก localStorage
-        const mergedData = {
-          ...data,
-          content: JSON.stringify({
-            elements: localStorageTemplate.elements,
-            canvasSize: localStorageTemplate.canvasSize || data.canvasSize || { width: 400, height: 400 }
-          })
+        // สร้าง template data ที่พร้อมสำหรับส่งต่อไปยัง TemplateDesigner
+        const templateInfo = {
+          name: data.name || 'Unnamed Template',
+          description: data.description || '',
+          productKey: data.productKey || '',
+          customerKey: data.customerKey || '',
+          paperSize: data.paperSize || '4x4',
+          orientation: data.orientation || 'Portrait',
+          templateType: data.templateType || 'Standard'
         };
         
-        setTemplateData(mergedData);
+        // จัดเตรียมข้อมูลที่จะส่งไป
+        setTemplateData({
+          initialTemplate: {
+            elements: localStorageTemplate.elements,
+            canvasSize: localStorageTemplate.canvasSize || { width: 400, height: 400 },
+            templateInfo: templateInfo
+          },
+          initialTemplateFromLocalStorage: true
+        });
       } else {
-        setTemplateData(data);
+        // กรณีใช้ข้อมูลจาก API
+        setTemplateData({
+          initialTemplate: data,
+          initialTemplateFromLocalStorage: false
+        });
       }
       
       setError(null);
@@ -119,11 +129,12 @@ export default function EditTemplate() {
     }
   };
 
+  // โหลด template เมื่อพร้อม
   useEffect(() => {
     if (isReady && id && isClient) {
       fetchTemplate(id as string);
     }
-  }, [isReady, id, isClient, localStorageTemplate]); // เพิ่ม localStorageTemplate เป็น dependency เพื่อรัน fetchTemplate อีกครั้งเมื่อมีการโหลด template จาก localStorage
+  }, [isReady, id, isClient, localStorageTemplate]);
 
   if (!isReady || !isClient) {
     return (
@@ -175,7 +186,8 @@ export default function EditTemplate() {
         {templateData ? (
           <TemplateDesigner 
             templateId={id as string} 
-            initialTemplate={templateData}
+            initialTemplate={templateData.initialTemplate}
+            initialTemplateFromLocalStorage={templateData.initialTemplateFromLocalStorage}
           />
         ) : (
           <div className="flex justify-center items-center min-h-screen">

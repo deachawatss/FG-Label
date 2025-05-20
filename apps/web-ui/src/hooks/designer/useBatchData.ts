@@ -130,7 +130,7 @@ export const useBatchData = () => {
     
     // ข้อมูลผู้ผลิต
     const manufacturerInfo = data.manufacturerInfo || data.MANUFACTURER_INFO || 
-      'MANUFACTURED BY : Newly Weds Foods (Thailand) Limited\n909 Moo 15, Teparak Road, T.Bangsaothong, A.Bangsaothong, Samutprakarn 10570\nThailand Phone (662) 3159000 Fax (662) 3131638-9';
+      'MANUFACTURED BY : Newly Weds Foods (Thailand) Limited\n909 Moo 15, Teparak Road, T.Bangsaothong, A.Bangsaothong,\nSamutprakarn 10570\nThailand Phone (662) 3159000 Fax (662) 3131638-9';
     
     // สร้างวันที่ปัจจุบันในรูปแบบที่ต้องการ
     const now = new Date();
@@ -170,7 +170,7 @@ export const useBatchData = () => {
       x: 0,
       y: 10,
       width: cw,
-      height: 20,
+      height: 25,
       text: productName,
       fontSize: 16,
       fontFamily: 'Arial',
@@ -198,15 +198,32 @@ export const useBatchData = () => {
       visible: true
     } as TextElement);
     
+    // คำนวณความยาวของข้อความเพื่อกำหนดความกว้างที่เหมาะสม
+    const calcTextWidth = (text: string, fontSize: number, fontCoef: number = 0.6) => {
+      // คำนวณสำหรับข้อความที่มีบรรทัดใหม่
+      if (text.includes('\n')) {
+        const lines = text.split('\n');
+        const longestLine = lines.reduce((a, b) => a.length > b.length ? a : b, '');
+        return Math.max(120, Math.min(cw - 50, longestLine.length * fontSize * fontCoef));
+      }
+      // ใช้ค่าสัมประสิทธิ์ที่มากขึ้นสำหรับข้อความยาว
+      if (text.length > 30) {
+        fontCoef = Math.max(fontCoef, 0.65);
+      }
+      // จำกัดความกว้างไม่ให้เกินขอบ canvas
+      return Math.max(120, Math.min(cw - 50, text.length * fontSize * fontCoef));
+    };
+    
     // 3. NET WEIGHT - Label และค่า
+    const netWeightText = `NET WEIGHT: ${netWeight} KG/BAG`;
     els.push({
       id: uuidv4(),
       type: 'text',
       x: 25,
       y: 80,
-      width: 350,
-      height: 20,
-      text: `NET WEIGHT: ${netWeight} KG/BAG`,
+      width: calcTextWidth(netWeightText, 14, 0.7),
+      height: 22,
+      text: netWeightText,
       fontSize: 14,
       fontFamily: 'Arial',
       fill: '#000000',
@@ -216,14 +233,15 @@ export const useBatchData = () => {
     } as TextElement);
     
     // 4. LOT CODE - Label และค่า
+    const lotCodeText = `LOT CODE: ${lotDate}`;
     els.push({
       id: uuidv4(),
       type: 'text',
       x: 25,
       y: 100,
-      width: 350,
-      height: 20,
-      text: `LOT CODE: ${lotDate}`,
+      width: calcTextWidth(lotCodeText, 14, 0.7),
+      height: 22,
+      text: lotCodeText,
       fontSize: 14,
       fontFamily: 'Arial',
       fill: '#000000',
@@ -233,14 +251,15 @@ export const useBatchData = () => {
     } as TextElement);
     
     // 5. BEST BEFORE - Label และค่า
+    const bestBeforeText = `${expiryDateCaption}: ${bestBeforeDate}`;
     els.push({
       id: uuidv4(),
       type: 'text',
       x: 25,
       y: 120,
-      width: 350,
-      height: 20,
-      text: `${expiryDateCaption}: ${bestBeforeDate}`,
+      width: calcTextWidth(bestBeforeText, 14, 0.7),
+      height: 22,
+      text: bestBeforeText,
       fontSize: 14,
       fontFamily: 'Arial',
       fill: '#000000',
@@ -255,8 +274,8 @@ export const useBatchData = () => {
       type: 'text',
       x: 25,
       y: 140,
-      width: 350,
-      height: 20,
+      width: calcTextWidth(allergensLabel, 14, 0.7),
+      height: 22,
       text: allergensLabel,
       fontSize: 14,
       fontFamily: 'Arial',
@@ -267,14 +286,15 @@ export const useBatchData = () => {
     } as TextElement);
     
     // 7. STORAGE CONDITION
+    const storageText = `Recommended Storage: ${storageCondition}`;
     els.push({
       id: uuidv4(),
       type: 'text',
       x: 25,
       y: 160,
-      width: 350,
-      height: 20,
-      text: `Recommended Storage: ${storageCondition}`,
+      width: calcTextWidth(storageText, 14, 0.7),
+      height: 22,
+      text: storageText,
       fontSize: 14,
       fontFamily: 'Arial',
       fill: '#000000',
@@ -289,10 +309,27 @@ export const useBatchData = () => {
       type: 'text',
       x: 25,
       y: 180,
-      width: 350,
-      height: 20,
+      width: calcTextWidth(additionalInfo, 14, 0.7),
+      height: 22,
       text: additionalInfo,
       fontSize: 14,
+      fontFamily: 'Arial',
+      fill: '#000000',
+      align: 'left',
+      draggable: true,
+      visible: true
+    } as TextElement);
+    
+    // Manufacturer Info - อยู่ด้านล่าง
+    els.push({
+      id: uuidv4(),
+      type: 'text',
+      x: 25,
+      y: 210,
+      width: Math.min(cw - 50, calcTextWidth(manufacturerInfo, 10, 0.55)),
+      height: 60,
+      text: manufacturerInfo,
+      fontSize: 10,
       fontFamily: 'Arial',
       fill: '#000000',
       align: 'left',
@@ -304,16 +341,16 @@ export const useBatchData = () => {
     els.push({
       id: uuidv4(),
       type: 'barcode',
-      x: (cw - 300) / 2, // จัดให้อยู่ตรงกลางแนวนอน
-      y: 235,
-      width: 300,
-      height: 90, // เพิ่มความสูงเพื่อให้มีพื้นที่แสดงข้อความด้านล่าง
+      x: (cw - 200) / 2, // จัดให้อยู่ตรงกลางแนวนอน
+      y: ch - 90, // จัดให้อยู่ด้านล่างของ canvas
+      width: 200,
+      height: 70,
       value: batchNo,
       format: 'CODE128',
       fill: '#000000',
       draggable: true,
       visible: true,
-      displayValue: true,
+      displayValue: true, // แสดงข้อความใต้บาร์โค้ด
       fontSize: 14,
       fontFamily: 'monospace',
       textAlign: 'center',
@@ -321,17 +358,17 @@ export const useBatchData = () => {
       textMargin: 2,
       background: '#FFFFFF',
       lineColor: '#000000',
-      margin: 10
+      margin: 5
     } as BarcodeElement);
     
     // 10. PRINT DATE TIME - มุมขวาล่าง
     els.push({
       id: uuidv4(),
       type: 'text',
-      x: cw - 10,
-      y: ch - 10,
-      width: 120,
-      height: 10,
+      x: cw - 150,
+      y: ch - 20,
+      width: 140,
+      height: 15,
       text: printDateTime,
       fontSize: 10,
       fontFamily: 'Arial',
@@ -347,8 +384,8 @@ export const useBatchData = () => {
     els.push({
       id: uuidv4(),
       type: 'qr',
-      x: cw - 5 - 90,
-      y: 5,
+      x: cw - 110,
+      y: 10,
       width: 90,
       height: 90,
       value: qrValue,

@@ -21,8 +21,19 @@ import {
   Select,
   DatePicker,
   List,
-  Popover
+  Popover,
+  Tabs,
+  Form,
+  Switch,
+  Radio,
+  Descriptions,
+  Drawer,
+  Alert,
+  Badge,
+  Dropdown,
+  Avatar
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   SearchOutlined,
   ReloadOutlined,
@@ -31,7 +42,21 @@ import {
   EditOutlined,
   BarcodeOutlined,
   SyncOutlined,
-  FileOutlined
+  FileOutlined,
+  SettingOutlined,
+  QrcodeOutlined,
+  DeleteOutlined,
+  CheckCircleOutlined,
+  WarningOutlined,
+  InfoCircleOutlined,
+  CloseCircleOutlined,
+  UserOutlined,
+  LogoutOutlined,
+  HistoryOutlined,
+  FileTextOutlined,
+  PlusOutlined,
+  DownOutlined,
+  ScanOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import RequireAuth from '../components/RequireAuth';
@@ -39,53 +64,54 @@ import dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
 import { useRouter } from 'next/router';
 
-// เพิ่มการนำเข้า Option จาก Select
-const { Option } = Select;
+const { Content } = Layout;
+const { Title, Text } = Typography;
 
-// เพิ่ม type declaration สำหรับ QRCode ใน Window interface
+// เพิ่มประกาศตัวแปร isClient ที่ด้านบนสุดของไฟล์
+const isClient = typeof window !== 'undefined';
+
+// แก้ไขประกาศ JsBarcode จาก import เป็น let
+let JsBarcode: any;
+if (isClient) {
+  try {
+    JsBarcode = require('jsbarcode');
+  } catch (e) {
+    // JsBarcode จะถูกโหลดแบบไดนามิกในภายหลัง
+  }
+}
+
+// เพิ่ม interface เพื่อขยาย Window interface
 declare global {
   interface Window {
     QRCode: any;
-    JsBarcode: any;
-    renderAllBarcodes?: () => void; // เพิ่มฟังก์ชัน renderAllBarcodes
-    handleQrCodeScanned?: (data: string) => void; // เพิ่มฟังก์ชัน handleQrCodeScanned
+    renderAllBarcodes?: () => void;
+    handleQrCodeScanned?: (data: string) => void;
+    JsBarcode?: any;
   }
 }
 
-// Check if we're on client-side
-const isClient = typeof window !== 'undefined';
-
-// Import client-only modules
-let QRCode: any = null;
-let JsBarcode: any = null;
-if (isClient) {
-  // ทำการโหลด JsBarcode ทันทีเมื่อหน้าเว็บโหลดเสร็จ
-  try {
-  QRCode = require('qrcode');
-  JsBarcode = require('jsbarcode');
-    
-    // ตรวจสอบว่าไลบรารีถูกโหลดหรือไม่
-    window.addEventListener('DOMContentLoaded', () => {
-      if (typeof JsBarcode === 'undefined' || JsBarcode === null) {
-        console.warn('JsBarcode not loaded during initialization, attempting to load dynamically');
-        const script = document.createElement('script');
-        script.id = 'jsbarcode-script';
-        script.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';
-        script.onload = function() {
-          console.log('JsBarcode loaded dynamically');
-          // กำหนดค่า JsBarcode ให้กับตัวแปรโกลบอล
-          JsBarcode = window.JsBarcode;
-        };
-        document.head.appendChild(script);
-      }
-    });
-  } catch (e) {
-    console.error('Error loading barcode libraries:', e);
-  }
+// เพิ่ม interface Options สำหรับ JsBarcode ที่มี fontFamily
+interface BarcodeOptions {
+  format?: string;
+  width?: number;
+  height?: number;
+  displayValue?: boolean;
+  text?: string;
+  fontOptions?: string;
+  font?: string;
+  fontFamily?: string;
+  textAlign?: string;
+  textPosition?: string;
+  textMargin?: number;
+  fontSize?: number;
+  background?: string;
+  lineColor?: string;
+  margin?: number;
+  marginTop?: number;
+  marginBottom?: number;
+  marginLeft?: number;
+  marginRight?: number;
 }
-
-const { Content } = Layout;
-const { Title, Text } = Typography;
 
 /* ------------------------------------------------------------------------ */
 /* Utility Functions                                                       */
@@ -331,6 +357,9 @@ interface Batch {
   itemKey: string;
   custKey: string;
   templateId?: number;
+  templateName?: string; // เพิ่มฟิลด์สำหรับชื่อเทมเพลต
+  templateUpdatedAt?: string; // เพิ่มฟิลด์สำหรับวันที่อัปเดตเทมเพลตล่าสุด
+  templateVersion?: number; // เพิ่มฟิลด์สำหรับเวอร์ชันเทมเพลต
   allergen1: string; // เพิ่มเพื่อแก้ไขข้อผิดพลาด linter
 }
 
@@ -508,6 +537,9 @@ const extractBatchData = (record: any): Batch => {
     itemKey: getRecordValue('ItemKey') || '',
     custKey: getRecordValue('CustKey') || '',
     templateId: parseInt(getRecordValue('TemplateID') || '0', 10) || undefined,
+    templateName: getRecordValue('TemplateName') || '',
+    templateUpdatedAt: getRecordValue('TemplateUpdatedAt') || '',
+    templateVersion: parseInt(getRecordValue('Version') || '0', 10) || undefined,
     allergen1: allergen1
   };
 };
@@ -803,8 +835,8 @@ const createStandardTemplate = (batch: Batch): any => {
       type: 'barcode',
       x: 50,
       y: 290,
-      width: 300,
-      height: 80,
+      width: 200,
+      height: 70,
       format: 'CODE128',
       value: batch.batchNo || '',
       displayValue: true,
@@ -849,13 +881,18 @@ const createStandardTemplate = (batch: Batch): any => {
   };
 };
 
-const BatchSearch: React.FC = () => {
+// แก้ไข React.FC เป็น React.FC<{}>
+const BatchSearch: React.FC<{}> = () => {
   // State variables
   const [searchText, setSearchText] = useState<string>('');
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [previewVisible, setPreviewVisible] = useState<boolean>(false);
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
+  
+  // เพิ่ม state สำหรับข้อมูลผู้ใช้
+  const [username, setUsername] = useState<string>('');
+  const [userMenuVisible, setUserMenuVisible] = useState<boolean>(false);
   
   // Print preview modal state
   const [printModalVisible, setPrintModalVisible] = useState<boolean>(false);
@@ -934,33 +971,25 @@ const BatchSearch: React.FC = () => {
                 height: 50,
                 displayValue: true,
                 fontSize: 14,
-                font: 'monospace',
+                fontFamily: 'monospace',
                 margin: 5,
                 textAlign: "center",
                 textPosition: "bottom",
                 textMargin: 2
-              });
+              } as BarcodeOptions);
             }
           } else {
             console.warn('JsBarcode library not loaded yet');
             // โหลด JsBarcode ถ้ายังไม่มี
             const script = document.createElement('script');
+            script.id = 'jsbarcode-script';
             script.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';
             script.onload = function() {
-              const barcodeElement = document.getElementById(`barcode-${selectedBatch.batchNo}`);
-              if (barcodeElement) {
-                window.JsBarcode(barcodeElement, selectedBatch.batchNo, {
-                  format: 'CODE128',
-                  width: 2,
-                  height: 50,
-                  displayValue: true,
-                  fontSize: 14,
-                  font: 'monospace',
-                  margin: 5,
-                  textAlign: "center",
-                  textPosition: "bottom",
-                  textMargin: 2
-                });
+              console.log('JsBarcode loaded dynamically');
+              // กำหนดค่า JsBarcode ให้กับตัวแปรโกลบอล
+              if (window.JsBarcode) {
+                // ใช้ตัวแปรในระดับโกลบอล
+                JsBarcode = window.JsBarcode;
               }
             };
             document.head.appendChild(script);
@@ -1036,6 +1065,7 @@ const BatchSearch: React.FC = () => {
         return;
       }
       
+      // แก้ไข URL จาก batches/search เป็น batches/labelview เพื่อให้ตรงกับ API ที่มีอยู่ในระบบ
       const apiUrl = `${ApiHelper.getApiBaseUrl()}/batches/labelview?batchNo=${encodeURIComponent(searchQuery)}`;
       console.log('Fetching from API URL:', apiUrl);
       
@@ -1080,7 +1110,7 @@ const BatchSearch: React.FC = () => {
       // แสดงข้อความที่เฉพาะเจาะจงมากขึ้น
       if (error.response) {
         // ถ้ามีการตอบกลับจาก server (status code ไม่ใช่ 2xx)
-        message.error(`API Error (${error.response.status}): ${error.response.data?.message || 'Unknown error'}`);
+        message.error(`ข้อผิดพลาดในการค้นหา batch: ${error.response.status}: ${error.response.data?.message || 'Unknown error'}`);
         
         // ถ้าเป็น 401 Unauthorized ให้ redirect ไปหน้า login
         if (error.response.status === 401) {
@@ -1092,10 +1122,10 @@ const BatchSearch: React.FC = () => {
         }
       } else if (error.request) {
         // ถ้าไม่มีการตอบกลับจาก server (no response)
-        message.error('No response from server. Please check your network connection.');
+        message.error('ไม่ได้รับการตอบกลับจากเซิร์ฟเวอร์ กรุณาตรวจสอบการเชื่อมต่อเครือข่าย');
       } else {
         // มีข้อผิดพลาดในการตั้งค่า request
-        message.error(`Error: ${error.message}`);
+        message.error(`ข้อผิดพลาดในการค้นหา batch: ${error.message}`);
       }
       
       // ไม่ใช้ mock data ตามที่ผู้ใช้ต้องการ
@@ -1117,6 +1147,37 @@ const BatchSearch: React.FC = () => {
     } catch (error) {
       console.error('Error loading template:', error);
       throw error;
+    }
+  };
+
+  // โหลด template ตาม productKey และ customerKey
+  const loadTemplateByProductAndCustomer = async (productKey: string, customerKey?: string): Promise<any> => {
+    try {
+      // สร้าง URL สำหรับค้นหา template
+      const apiUrl = `${ApiHelper.getApiBaseUrl()}/templates/lookup?productKey=${encodeURIComponent(productKey)}${customerKey ? `&customerKey=${encodeURIComponent(customerKey)}` : ''}`;
+      console.log('Loading template by product and customer:', apiUrl);
+      
+      const headers = ApiHelper.getAuthHeaders();
+      const response = await axios.get(apiUrl, { headers });
+      
+      // ถ้าพบ templateId ให้โหลด template ข้อมูลเต็ม
+      if (response.data && response.data.templateID) {
+        console.log('Found template ID:', response.data.templateID);
+        return loadTemplateById(response.data.templateID);
+      }
+      
+      return null;
+    } catch (error) {
+      // ถ้าไม่พบ (404) หรือ parameter ไม่ถูกต้อง (400) ถือว่าเป็นเรื่องปกติ ไม่ถือเป็นข้อผิดพลาด
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 404 || error.response?.status === 400) {
+          console.log('No template found for this product/customer combination or invalid parameters');
+          return null;
+        }
+      }
+      
+      console.error('Error loading template by product and customer:', error);
+      return null;
     }
   };
 
@@ -1156,36 +1217,80 @@ const BatchSearch: React.FC = () => {
       
       setLoadingPreview(true);
       
-      // ถ้ามี templateId ให้โหลด template จาก API
-      if (batch.templateId) {
+      // 1. ลำดับการค้นหา template:
+      // 1.1. ค้นหาตาม productKey + customerKey
+      // 1.2. ค้นหาตาม productKey อย่างเดียว
+      // 1.3. ค้นหาตาม templateId ถ้ามี
+      // 1.4. สร้าง standard template ถ้าไม่พบ template ใด ๆ
+      
+      let template = null;
+      
+      // 1.1. ค้นหาตาม productKey + customerKey
+      if (batch.itemKey && batch.custKey) {
+        console.log(`Searching template by productKey (${batch.itemKey}) and customerKey (${batch.custKey})`);
+        template = await loadTemplateByProductAndCustomer(batch.itemKey, batch.custKey);
+      }
+      
+      // 1.2. ค้นหาตาม productKey อย่างเดียวถ้ายังไม่พบ
+      if (!template && batch.itemKey) {
+        console.log(`Searching template by productKey (${batch.itemKey}) only`);
+        template = await loadTemplateByProductAndCustomer(batch.itemKey);
+      }
+      
+      // 1.3. ค้นหาตาม templateId ถ้ายังไม่พบและมี templateId
+      if (!template && batch.templateId) {
+        console.log(`Searching template by templateId (${batch.templateId})`);
         try {
-          const response = await loadTemplateById(batch.templateId);
-          
-          // สร้าง HTML preview
-          const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(response);
-          const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
-          setTemplatePreview(previewHtml);
-          
-          message.success('Template preview loaded successfully');
+          template = await loadTemplateById(batch.templateId);
         } catch (error) {
-          console.error('Error loading template:', error);
-          
-          // ถ้าโหลด template ไม่สำเร็จ ให้สร้าง standard template
-          const standardTemplate = createStandardTemplate(batch);
-          const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(standardTemplate);
-          const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
-          setTemplatePreview(previewHtml);
-          
-          message.warning('Using standard template as fallback');
+          console.error('Error loading template by ID:', error);
         }
-      } else {
-        // ถ้าไม่มี templateId ให้สร้าง standard template
-        const standardTemplate = createStandardTemplate(batch);
-        const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(standardTemplate);
-        const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
-        setTemplatePreview(previewHtml);
-        
+      }
+      
+      // 1.4. สร้าง standard template ถ้าไม่พบ template ใด ๆ
+      if (!template) {
+        console.log('No template found, creating standard template');
+        template = createStandardTemplate(batch);
         message.info('Using standard template');
+      } else {
+        message.success('Template loaded successfully');
+      }
+      
+      // สร้าง HTML preview
+      const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(template);
+      const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
+      setTemplatePreview(previewHtml);
+      
+      // ถ้าพบ template จาก API ให้บันทึกข้อมูลลงใน localStorage
+      // เพื่อให้หน้า designer สามารถนำไปใช้ต่อได้
+      if (template && template !== createStandardTemplate(batch)) {
+        try {
+          // สร้าง content object จาก template
+          const contentObj = TemplateHelper.safeParseContent(template);
+          
+          if (contentObj && contentObj.elements) {
+            console.log(`createElementsFromPreview สำหรับ templateId ที่มีอยู่แล้ว, elements: (${contentObj.elements.length}) ${JSON.stringify(contentObj.elements.map(e => ({ id: e.id, type: e.type })))}`);
+            
+            // บันทึกลงใน localStorage
+            localStorage.setItem('batchSearchTemplate', JSON.stringify({
+              elements: contentObj.elements,
+              canvasSize: contentObj.canvasSize || { width: 400, height: 400 },
+              templateInfo: {
+                name: template.name || `Auto-${batch.batchNo}-${new Date().toISOString().slice(0, 10)}`,
+                description: template.description || '',
+                productKey: batch.itemKey || '',
+                customerKey: batch.custKey || '',
+                paperSize: template.paperSize || '4x4',
+                orientation: template.orientation || 'Portrait',
+                templateType: template.templateType || 'INNER'
+              }
+            }));
+            
+            console.log('เก็บข้อมูล template ใน localStorage เรียบร้อย ด้วย key: batchSearchTemplate สำหรับ templateId ที่มีอยู่แล้ว');
+          }
+        } catch (error) {
+          console.error('Error saving template to localStorage:', error);
+        }
       }
     } catch (error) {
       console.error('Error preparing preview:', error);
@@ -1543,6 +1648,7 @@ const BatchSearch: React.FC = () => {
     
     try {
       console.log('Printing range:', startBag, 'to', endBag);
+      console.log('Generate QR Code:', generateQRCode);
       
       // คำนวณจำนวน label ที่จะพิมพ์
       const start = Math.max(1, startBag || 1);
@@ -1575,6 +1681,9 @@ const BatchSearch: React.FC = () => {
         const doc = iframe.contentDocument;
         if (doc) {
           doc.open();
+          
+          // เพิ่ม console.log เพื่อตรวจสอบการทำงาน
+          console.log('Preparing to print for batch:', selectedBatch.batchNo);
           
           // สร้าง HTML header
           let printHTML = `
@@ -1623,52 +1732,112 @@ const BatchSearch: React.FC = () => {
                 <!-- เพิ่ม QRCode library ด้วย -->
                 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.0/build/qrcode.min.js"></script>
                 <script>
-                  // ฟังก์ชันสำหรับแสดง barcode ในทุกหน้า
-                  function renderAllBarcodes() {
-                    try {
-                      // ค้นหา barcode elements ทั้งหมด
-                      const barcodeElements = document.querySelectorAll('[id^="barcode-"]');
-                      barcodeElements.forEach(element => {
-                        // ดึง batchNo จาก id
-                        const batchNo = element.id.replace('barcode-', '');
-                        // แสดง barcode
-                        JsBarcode(element, batchNo, {
-                          format: "CODE128",
-                          width: 2,
-                          height: 50,
-                          displayValue: true,
-                          fontSize: 14,
-                          margin: 5,
-                          font: 'monospace',
-                          textAlign: 'center',
-                          textPosition: 'bottom',
-                          textMargin: 2
-                        });
-                      });
+                  // สร้างการเช็คว่าไลบรารีโหลดเรียบร้อยหรือไม่
+                  function checkLibrariesLoaded() {
+                    return new Promise((resolve, reject) => {
+                      let checkCount = 0;
+                      const maxChecks = 20; // ตรวจสอบสูงสุด 20 ครั้ง (10 วินาที)
                       
-                      // ค้นหา QR code elements ทั้งหมด
-                      const qrElements = document.querySelectorAll('[id^="qrcode-"]');
-                      qrElements.forEach(element => {
-                        // ดึง batchNo จาก id
-                        const batchNo = element.id.replace('qrcode-', '');
-                        // สร้างข้อมูลสำหรับ QR code
-                        const qrValue = element.getAttribute('data-qr-value') || batchNo;
-                        
-                        // แสดง QR code
-                        if (window.QRCode) {
-                          QRCode.toCanvas(element, qrValue, {
-                            width: 80,
-                            margin: 1
-                          });
+                      function check() {
+                        console.log('Checking if libraries loaded...', checkCount);
+                        if (typeof window.JsBarcode !== 'undefined' && typeof window.QRCode !== 'undefined') {
+                          console.log('Libraries loaded successfully!');
+                          resolve(true);
+                          return;
                         }
-                      });
-                    } catch(e) {
-                      console.error('Error rendering codes:', e);
-                    }
+                        
+                        checkCount++;
+                        if (checkCount >= maxChecks) {
+                          console.error('Libraries failed to load after timeout');
+                          reject(new Error('Libraries timeout'));
+                          return;
+                        }
+                        
+                        setTimeout(check, 500); // ตรวจสอบทุก 500 มิลลิวินาที
+                      }
+                      
+                      check();
+                    });
                   }
                   
-                  // รอให้เอกสารโหลดเสร็จแล้วค่อยแสดง barcode และ QR code
-                  window.onload = renderAllBarcodes;
+                  // เพิ่มการตรวจสอบการโหลดของไลบรารี
+                  window.onload = function() {
+                    console.log('Window loaded in iframe');
+                    
+                    // รอให้ไลบรารีโหลดเสร็จก่อน
+                    checkLibrariesLoaded()
+                      .then(() => {
+                        console.log('JsBarcode available:', typeof window.JsBarcode !== 'undefined');
+                        console.log('QRCode available:', typeof window.QRCode !== 'undefined');
+                        
+                        // ฟังก์ชันสำหรับแสดง barcode ในทุกหน้า
+                        function renderAllBarcodes() {
+                          try {
+                            console.log('Rendering barcodes and QR codes');
+                            // ค้นหา barcode elements ทั้งหมด
+                            const barcodeElements = document.querySelectorAll('[id^="barcode-"]');
+                            console.log('Found barcode elements:', barcodeElements.length);
+                            
+                            barcodeElements.forEach(element => {
+                              // ดึง batchNo จาก id
+                              const batchNo = element.id.replace('barcode-', '');
+                              console.log('Rendering barcode for:', batchNo);
+                              
+                              // แสดง barcode
+                              JsBarcode(element, batchNo, {
+                                format: "CODE128",
+                                width: 2,
+                                height: 50,
+                                displayValue: true,
+                                fontSize: 14,
+                                fontFamily: 'monospace',
+                                textAlign: 'center',
+                                textPosition: 'bottom',
+                                textMargin: 2,
+                                margin: 5
+                              });
+                            });
+                            
+                            // ค้นหา QR code elements ทั้งหมด
+                            const qrElements = document.querySelectorAll('[id^="qrcode-"]');
+                            console.log('Found QR elements:', qrElements.length);
+                            
+                            qrElements.forEach(element => {
+                              // ดึง batchNo จาก id
+                              const batchNo = element.id.replace('qrcode-', '');
+                              // สร้างข้อมูลสำหรับ QR code
+                              const qrValue = element.getAttribute('data-qr-value') || batchNo;
+                              
+                              console.log('Rendering QR code for:', batchNo);
+                              
+                              // แสดง QR code
+                              if (window.QRCode) {
+                                QRCode.toCanvas(element, qrValue, {
+                                  width: 80,
+                                  margin: 1
+                                });
+                              }
+                            });
+                            
+                            console.log('Finished rendering all codes');
+                            return true;
+                          } catch(e) {
+                            console.error('Error rendering codes:', e);
+                            return false;
+                          }
+                        }
+                        
+                        // เรียกใช้ฟังก์ชันเพื่อแสดง barcodes และ QR codes
+                        const renderResult = renderAllBarcodes();
+                        console.log('Render result:', renderResult);
+                        
+                        // ทำให้ฟังก์ชันนี้สามารถเรียกใช้จากภายนอกได้
+                        window.renderAllBarcodes = renderAllBarcodes;
+                      })
+                      .catch(err => {
+                        console.error('Failed to initialize libraries:', err);
+                      });
+                  }
                 </script>
               </head>
               <body>
@@ -1756,30 +1925,49 @@ const BatchSearch: React.FC = () => {
           // ต้องรอให้ iframe โหลดเสร็จก่อนพิมพ์
           iframe.onload = () => {
             try {
+              console.log('Iframe loaded, preparing to render barcodes');
+              
               // แสดง barcode และ QR code ทันทีเมื่อโหลดเสร็จ
               if (iframe.contentWindow && iframe.contentWindow.renderAllBarcodes) {
+                console.log('Calling renderAllBarcodes');
                 iframe.contentWindow.renderAllBarcodes();
+              } else {
+                console.error('renderAllBarcodes function not found in iframe');
               }
               
+              // เพิ่มเวลารอให้นานขึ้นเพื่อให้แน่ใจว่า barcode และ QR code แสดงเรียบร้อยแล้ว
               setTimeout(() => {
-                if (iframe.contentWindow) {
-                  iframe.contentWindow.focus();
-                  iframe.contentWindow.print();
-                  
-                  // แก้ไขปัญหา optional chaining
-                  const contentWindow = iframe.contentWindow;
-                  if (contentWindow) {
-                    contentWindow.onafterprint = () => {
-                      setIsPrinting(false);
-                    };
+                try {
+                  if (iframe.contentWindow) {
+                    console.log('Focusing iframe window');
+                    iframe.contentWindow.focus();
+                    
+                    console.log('Triggering print dialog');
+                    iframe.contentWindow.print();
+                    
+                    // แก้ไขปัญหา optional chaining
+                    const contentWindow = iframe.contentWindow;
+                    if (contentWindow) {
+                      contentWindow.onafterprint = () => {
+                        console.log('Print completed or cancelled');
+                        setIsPrinting(false);
+                      };
+                    }
+                  } else {
+                    console.error('Cannot access iframe.contentWindow');
+                    setIsPrinting(false);
                   }
+                } catch (printError) {
+                  console.error('Error during printing:', printError);
+                  setIsPrinting(false);
                 }
-              }, 800); // เพิ่มเวลารอให้นานขึ้นเพื่อให้แน่ใจว่า barcode และ QR code แสดงเรียบร้อยแล้ว
+              }, 1500); // เพิ่มเวลารอจาก 800 เป็น 1500 มิลลิวินาที
               
               // กรณีที่ onafterprint ไม่ทำงาน ให้เซ็ต timeout เพื่อยกเลิกสถานะ printing
               setTimeout(() => {
+                console.log('Safety timeout to reset printing state');
                 setIsPrinting(false);
-              }, 5000);
+              }, 10000); // เพิ่มเวลารอจาก 5000 เป็น 10000 มิลลิวินาที
             } catch (error) {
               console.error('Print error:', error);
               setIsPrinting(false);
@@ -1953,23 +2141,43 @@ const BatchSearch: React.FC = () => {
                   height: 50,
                   displayValue: true,
                   fontSize: 14,
+                  fontFamily: 'monospace',
                   margin: 5,
-                  font: 'monospace',
                   textAlign: 'center',
                   textPosition: 'bottom',
-                  textMargin: 2
+                  textMargin: 2,
+                  background: "#FFFFFF",
+                  lineColor: "#000000"
                 });
+              } else {
+                console.error("JsBarcode library not loaded");
               }
-            } catch(e) {
-              console.error("Error rendering barcode:", e);
+              
+              ${generateQRCode ? `
+              // เพิ่มคำสั่งสร้าง QR Code
+              if (window.QRCode) {
+                // ดึงค่า data-qr-value จาก element
+                const qrElement = document.getElementById("qrcode-${batchNo}");
+                const qrValue = qrElement ? qrElement.getAttribute('data-qr-value') || "${batchNo}" : "${batchNo}";
+                
+                QRCode.toCanvas(qrElement, qrValue, {
+                  width: 80,
+                  margin: 1
+                });
+              } else {
+                console.error("QRCode library not loaded");
+              }
+              ` : '// QR Code generation disabled'}
+            } catch (e) {
+              console.error('Error generating codes:', e);
             }
-          }, 100);
+          }, 500);
         </script>
       `;
       
-      // แสดง BARCODE ด้านล่าง - แก้ไขให้อยู่ตรงกลางอย่างแท้จริง
-      html += `<div style="position:absolute;top:235px;left:0;width:100%;text-align:center;margin:0 auto;display:flex;justify-content:center;align-items:center;">`;
-      html += `<svg id="barcode-${batchNo}" width="300" height="70" style="display:block;margin:0 auto;"></svg>`;
+      // แสดง BARCODE ด้านล่าง - จัดให้อยู่ตรงกลางทั้งแนวนอนและแนวตั้ง
+      html += `<div style="position:absolute;top:235px;left:50%;transform:translateX(-50%);width:200px;text-align:center;margin:0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;">`;
+      html += `<svg id="barcode-${batchNo}" width="200" height="70" style="display:block;margin:0 auto;"></svg>`;
       html += barcodeScript;
       html += `</div>`;
       
@@ -2057,7 +2265,7 @@ const BatchSearch: React.FC = () => {
                     displayValue: true,
                     fontSize: 14,
                     margin: 5,
-                    font: 'monospace',
+                    fontFamily: 'monospace',
                     textAlign: 'center',
                     textPosition: 'bottom',
                     textMargin: 2
@@ -2142,21 +2350,78 @@ const BatchSearch: React.FC = () => {
   // ฟังก์ชันสำหรับติดตั้ง QR scanner global
   const setupQrScanner = () => {
     if (typeof window !== 'undefined') {
-      // กำหนด global function สำหรับการสแกน QR code
-      window.handleQrCodeScanned = (data: string) => {
-        handleQrScan(data);
-      };
-      
-      // เพิ่ม event listener สำหรับการสแกน QR code จากภายนอก
-      window.addEventListener('message', (event) => {
-        if (event.data && event.data.type === 'qrcode_scanned') {
-          handleQrScan(event.data.content);
-        }
-      });
+      window.handleQrCodeScanned = handleQrScan;
     }
   };
-
-  // เรียกใช้ setupQrScanner เมื่อโหลดหน้า
+  
+  /**
+   * Handle user logout
+   */
+  const handleLogout = () => {
+    // แสดง confirmation dialog ก่อนทำการ logout
+    Modal.confirm({
+      title: 'Logout',
+      content: 'Are you sure you want to logout?',
+      onOk: () => {
+        // ลบข้อมูล token และ user จาก localStorage
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        
+        // นำทางกลับไปยังหน้า login
+        router.push('/login');
+        
+        // แสดงข้อความแจ้งเตือน
+        message.success('Logged out successfully');
+      },
+    });
+  };
+  
+  /**
+   * Navigate to Print Log page
+   */
+  const handleNavigateToPrintLog = () => {
+    router.push('/jobs');
+  };
+  
+  /**
+   * Navigate to Template Management page
+   */
+  const handleNavigateToTemplateManagement = () => {
+    router.push('/templates');
+  };
+  
+  /**
+   * Navigate to Template Designer (Create new template)
+   */
+  const handleNavigateToTemplateDesigner = () => {
+    router.push('/templates/designer');
+  };
+  
+  /**
+   * Load user info from localStorage on component mount
+   */
+  useEffect(() => {
+    if (isClient) {
+      const userJson = localStorage.getItem('user');
+      if (userJson) {
+        try {
+          const userData = JSON.parse(userJson);
+          setUsername(userData.username || 'User');
+        } catch (e) {
+          console.error('Error parsing user data:', e);
+          setUsername('User');
+        }
+      } else {
+        // ถ้าไม่มีข้อมูลผู้ใช้ ให้ใช้ค่าจาก token ถ้ามี
+        const token = localStorage.getItem('token');
+        if (token) {
+          setUsername('User');
+        }
+      }
+    }
+  }, []);
+  
+  // เรียกใช้ setupQrScanner เมื่อคอมโพเนนต์โหลดเสร็จ
   useEffect(() => {
     setupQrScanner();
   }, []);
@@ -2171,6 +2436,16 @@ const BatchSearch: React.FC = () => {
     try {
       const elements = [];
       
+      // กำหนดขนาดฟอนต์มาตรฐานสำหรับแต่ละประเภทข้อความ
+      const fontSizes = {
+        title: 18,        // สำหรับชื่อผลิตภัณฑ์ (Product Name)
+        itemKey: 32,      // สำหรับรหัสสินค้า (Item Key)
+        label: 16,        // สำหรับป้ายชื่อ (เช่น NET WEIGHT, LOT CODE, BEST BEFORE)
+        value: 16,        // สำหรับค่าข้อมูล (ค่า NET WEIGHT, วันที่, เลขที่ batch ฯลฯ)
+        secondary: 14,    // สำหรับข้อมูลรอง (เช่น Storage Condition)
+        footer: 10        // สำหรับข้อมูลบริษัท และข้อมูลส่วนท้าย
+      };
+      
       // 1. ชื่อสินค้า (Product Name) - Top Center
       elements.push({
         id: uuidv4(),
@@ -2180,7 +2455,7 @@ const BatchSearch: React.FC = () => {
         width: 400,
         height: 20,
         text: selectedBatch.productName || '',
-        fontSize: 18,
+        fontSize: fontSizes.title,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'center',
@@ -2197,7 +2472,7 @@ const BatchSearch: React.FC = () => {
         width: 400,
         height: 40,
         text: selectedBatch.itemKey || selectedBatch.productKey || '',
-        fontSize: 32,
+        fontSize: fontSizes.itemKey,
         fontFamily: 'Arial',
         fontWeight: 'bold',
         fill: '#000000',
@@ -2215,7 +2490,7 @@ const BatchSearch: React.FC = () => {
         width: 120,
         height: 20,
         text: 'NET WEIGHT',
-        fontSize: 16,
+        fontSize: fontSizes.label,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2232,7 +2507,7 @@ const BatchSearch: React.FC = () => {
         width: 170,
         height: 20,
         text: `${selectedBatch.netWeight || '25.00'} KG/BAG ${selectedBatch.processCell || '1B'}`,
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2249,7 +2524,7 @@ const BatchSearch: React.FC = () => {
         width: 120,
         height: 20,
         text: 'LOT CODE',
-        fontSize: 16,
+        fontSize: fontSizes.label,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2266,7 +2541,7 @@ const BatchSearch: React.FC = () => {
         width: 130,
         height: 20,
         text: selectedBatch.lotDate || '',
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2283,7 +2558,7 @@ const BatchSearch: React.FC = () => {
         width: 80,
         height: 20,
         text: selectedBatch.batchNo || '',
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'center',
@@ -2300,7 +2575,7 @@ const BatchSearch: React.FC = () => {
         width: 60,
         height: 20,
         text: selectedBatch.lineCode || 'P01B01',
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'right',
@@ -2317,7 +2592,7 @@ const BatchSearch: React.FC = () => {
         width: 120,
         height: 20,
         text: selectedBatch.expiryDateCaption || 'BEST BEFORE',
-        fontSize: 16,
+        fontSize: fontSizes.label,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2334,7 +2609,7 @@ const BatchSearch: React.FC = () => {
         width: 170,
         height: 20,
         text: selectedBatch.bestBeforeDate || '',
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2351,7 +2626,7 @@ const BatchSearch: React.FC = () => {
         width: 80,
         height: 20,
         text: selectedBatch.soNumber || 'S2508217',
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'right',
@@ -2370,7 +2645,7 @@ const BatchSearch: React.FC = () => {
         text: selectedBatch.allergensLabel?.startsWith('Allergens :') 
           ? selectedBatch.allergensLabel 
           : `Allergens : ${selectedBatch.allergensLabel || ''}`,
-        fontSize: 16,
+        fontSize: fontSizes.value,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2387,7 +2662,7 @@ const BatchSearch: React.FC = () => {
         width: 350,
         height: 20,
         text: `Recommended Storage : ${selectedBatch.storageCondition || ''}`,
-        fontSize: 14,
+        fontSize: fontSizes.secondary,
         fontFamily: 'Arial',
         fill: '#000000',
         align: 'left',
@@ -2404,12 +2679,12 @@ const BatchSearch: React.FC = () => {
         elements.push({
           id: uuidv4(),
           type: 'text',
-          x: 25,
+          x: 25, 
           y: 185,
           width: 350,
           height: 15,
           text: lines[0] || '',
-          fontSize: 10,
+          fontSize: fontSizes.footer,
           fontFamily: 'Arial',
           fill: '#000000',
           align: 'left',
@@ -2427,7 +2702,7 @@ const BatchSearch: React.FC = () => {
             width: 350,
             height: 15,
             text: lines[1] || '',
-            fontSize: 10,
+            fontSize: fontSizes.footer,
             fontFamily: 'Arial',
             fill: '#000000',
             align: 'left',
@@ -2446,7 +2721,7 @@ const BatchSearch: React.FC = () => {
             width: 350,
             height: 15,
             text: lines[2] || '',
-            fontSize: 10,
+            fontSize: fontSizes.footer,
             fontFamily: 'Arial',
             fill: '#000000',
             align: 'left',
@@ -2456,17 +2731,27 @@ const BatchSearch: React.FC = () => {
         }
       }
       
-      // 15. BARCODE - อยู่ตรงกลางด้านล่าง
+      // 15. BARCODE - อยู่ตรงกลางด้านล่าง - ปรับค่าให้ตรงกับที่ใช้ใน JsBarcode
       elements.push({
         id: uuidv4(),
         type: 'barcode',
-        x: 50,
+        x: (400 - 200) / 2, // ปรับให้อยู่ตรงกลางโดยคำนวณจากความกว้างของ canvas (400) ลบด้วยความกว้างของ barcode (200) หารด้วย 2
         y: 235,
-        width: 300,
-        height: 70,
+        width: 200, // ลดขนาดลงเหลือ 200 เพื่อให้ตรงกับที่ใช้ใน useBatchData
+        height: 70, // ลดความสูงเหลือ 70 (ส่วนของ barcode 50px + ส่วนของข้อความ 20px)
         value: selectedBatch.batchNo || '',
         format: 'CODE128',
         fill: '#000000',
+        displayValue: true, 
+        fontSize: 14,  // ต้องระบุเพื่อให้ขนาดตรงกับที่แสดงใน preview
+        fontFamily: 'monospace',  // เปลี่ยนจาก Arial เป็น monospace เพื่อให้ตรงกับที่ใช้ใน ElementRenderer
+        fontWeight: 'normal', // เพิ่มเพื่อไม่ให้เป็นตัวหนา
+        textAlign: 'center',
+        textPosition: 'bottom',
+        textMargin: 2,
+        background: '#FFFFFF',
+        lineColor: '#000000',
+        margin: 10, // เพิ่มระยะห่างจาก 5 เป็น 10 เพื่อให้เหมือนกับในหน้า Preview
         draggable: true,
         visible: true
       });
@@ -2500,20 +2785,22 @@ const BatchSearch: React.FC = () => {
       });
       
       // 17. QR CODE (ถ้าต้องการ) - มุมขวาบน
-      const qrValue = `BATCH:${selectedBatch.batchNo}\nPRODUCT:${selectedBatch.productName}\nLOT:${selectedBatch.lotCode}\nNET_WEIGHT:${selectedBatch.netWeight}\nBEST_BEFORE:${selectedBatch.bestBeforeDate}\nALLERGENS:${selectedBatch.allergensLabel}`;
-      
-      elements.push({
-        id: uuidv4(),
-        type: 'qr',
-        x: 400 - 5 - 90,
-        y: 5,
-        width: 90,
-        height: 90,
-        value: qrValue,
-        fill: '#000000',
-        draggable: true,
-        visible: true
-      });
+      if (generateQRCode) {
+        const qrValue = `BATCH:${selectedBatch.batchNo}\nPRODUCT:${selectedBatch.productName}\nLOT:${selectedBatch.lotCode}\nNET_WEIGHT:${selectedBatch.netWeight}\nBEST_BEFORE:${selectedBatch.bestBeforeDate}\nALLERGENS:${selectedBatch.allergensLabel}`;
+        
+        elements.push({
+          id: uuidv4(),
+          type: 'qr',
+          x: 400 - 5 - 90,
+          y: 5,
+          width: 90,
+          height: 90,
+          value: qrValue,
+          fill: '#000000',
+          draggable: true,
+          visible: true
+        });
+      }
       
       return elements;
     } catch (error) {
@@ -2525,24 +2812,112 @@ const BatchSearch: React.FC = () => {
   // เพิ่มส่วนแสดง QR popup ในส่วน return
   return (
     <Layout style={{ minHeight: '100vh', backgroundColor: '#f5f5f5' }}>
+      {/* Header bar with user info */}
+      <Layout.Header style={{ 
+        background: '#fff', 
+        padding: '0 24px', 
+        display: 'flex', 
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
+        height: '64px',
+        position: 'sticky',
+        top: 0,
+        zIndex: 1000
+      }}>
+        {/* Left side - Logo and app name */}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <Typography.Title level={3} style={{ 
+            margin: 15, 
+            fontFamily: "'Kanit', 'Prompt', sans-serif", 
+            fontWeight: 'bold',
+            background: 'linear-gradient(45deg, #5D4037, #8D6E63)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
+          }}>
+            FG Label System
+          </Typography.Title>
+        </div>
+        
+        {/* Right side - User menu */}
+        <div>
+          <Space>
+            {/* User dropdown */}
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: 'create-template',
+                    icon: <PlusOutlined />,
+                    label: 'Create Template',
+                    onClick: handleNavigateToTemplateDesigner
+                  },
+                  {
+                    key: 'templates',
+                    icon: <FileTextOutlined />,
+                    label: 'Template Management',
+                    onClick: handleNavigateToTemplateManagement
+                  },
+                  {
+                    key: 'printlog',
+                    icon: <HistoryOutlined />,
+                    label: 'Print Log',
+                    onClick: handleNavigateToPrintLog
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'logout',
+                    icon: <LogoutOutlined />,
+                    label: 'Logout',
+                    onClick: handleLogout
+                  }
+                ]
+              }}
+              trigger={['click']}
+            >
+              <a onClick={(e) => e.preventDefault()} style={{ 
+                color: '#5D4037', 
+                display: 'flex', 
+                alignItems: 'center',
+                background: 'rgba(93, 64, 55, 0.03)',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                border: '1px solid rgba(93, 64, 55, 0.15)',
+                boxShadow: '0 1px 1px rgba(0,0,0,0.03)'
+              }}>
+                <Avatar style={{ 
+                  backgroundColor: '#5D4037', 
+                  marginRight: 4,
+                  boxShadow: '0 1px 1px rgba(0,0,0,0.1)',
+                  fontSize: '10px'
+                }} icon={<UserOutlined />} size="small" />
+                <span style={{ 
+                  fontWeight: 'bold', 
+                  fontSize: '13px',
+                  color: '#5D4037'
+                }}>{username || 'User'}</span>
+                <DownOutlined style={{ fontSize: '9px', marginLeft: 4, color: '#5D4037' }} />
+              </a>
+            </Dropdown>
+          </Space>
+        </div>
+      </Layout.Header>
+      
       <Content style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
         <Card variant="outlined" style={{ overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
-          {/* Header with Logo */}
-          <Row justify="center" style={{ marginBottom: 24 }}>
-            <Col>
-              <div style={{ textAlign: 'center' }}>
-                <Image
-                  src="https://img2.pic.in.th/pic/logo14821dedd19c2ad18.png"
-                  alt="FG Label Logo"
-                  preview={false}
-                  width={140}
-                  style={{ marginBottom: 8 }}
-                />
-                <Title level={3} style={{ margin: 0, color: '#1890ff' }}>FG Label System</Title>
-                <Text type="secondary">Batch Search & Label Print</Text>
-              </div>
-            </Col>
-          </Row>
+          {/* Title */}
+          <div style={{ textAlign: 'center', marginBottom: 28 }}>
+            <Image
+              src="https://img2.pic.in.th/pic/logo14821dedd19c2ad18.png"
+              alt="FG Label Logo"
+              preview={false}
+              width={150}
+              style={{ marginBottom: 20 }}
+            />
+            <Title level={3} style={{ margin: 0, color: '#5D4037', background: 'linear-gradient(45deg, #5D4037, #8D6E63)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Batch Search & Label Print</Title>
+            <Text type="secondary">Search, preview and print labels for production batches</Text>
+          </div>
           
           <Divider style={{ margin: '12px 0 24px' }} />
 
@@ -2552,7 +2927,11 @@ const BatchSearch: React.FC = () => {
               <Input.Search
                 id="batch-search-input"
                 placeholder="Scan or type batch number..."
-                enterButton={<Button type="primary" icon={<SearchOutlined />}>Search</Button>}
+                enterButton={<Button type="primary" icon={<BarcodeOutlined />} style={{ 
+                  backgroundColor: '#5D4037', 
+                  borderColor: '#5D4037',
+                  boxShadow: '0 2px 6px rgba(93, 64, 55, 0.2)' 
+                }}></Button>}
                 allowClear
                 value={searchText}
                 autoFocus
@@ -2607,20 +2986,25 @@ const BatchSearch: React.FC = () => {
                 render: (date) => DateHelper.formatDateTime(date) || '-',
               },
               {
-                    title: 'Best Before',
-                    key: 'bestBefore',
-                    render: (_, record) => 
-                      DateHelper.calculateBestBefore(
-                        record.productionDate, 
-                        record.shelfLifeDays, 
-                        record.daysToExpire
-                      ) || '-',
-                  },
-                  {
-                    title: 'Bags',
+                title: 'Total Bags',
                 dataIndex: 'totalBags',
-                sorter: (a, b) => a.totalBags - b.totalBags,
-                    render: (bags) => <Text strong>{bags}</Text>,
+                sorter: (a, b) => (a.totalBags || 0) - (b.totalBags || 0),
+                render: (bags) => <Text strong>{bags}</Text>,
+              },
+              {
+                    title: 'Template Name',
+                    dataIndex: 'templateName',
+                    render: (text) => <Text>{text || '-'}</Text>,
+              },
+              {
+                    title: 'Version',
+                    dataIndex: 'templateVersion',
+                    render: (version) => <Text>{version || '-'}</Text>,
+              },
+              {
+                    title: 'Last Update',
+                    dataIndex: 'templateUpdatedAt',
+                    render: (date) => DateHelper.formatDateTime(date) || '-',
               },
               {
                     title: 'Action',
@@ -2636,7 +3020,12 @@ const BatchSearch: React.FC = () => {
                             onClick={(e) => {
                               e.stopPropagation();
                               handleAutoPreviewAndPrint(record);
-                            }} 
+                            }}
+                            style={{ 
+                              backgroundColor: '#5D4037', 
+                              borderColor: '#5D4037',
+                              boxShadow: '0 2px 6px rgba(93, 64, 55, 0.2)' 
+                            }}
                           />
                         </Tooltip>
                   </Space>
@@ -2785,6 +3174,12 @@ const BatchSearch: React.FC = () => {
               icon={<PrinterOutlined />}
               onClick={handleSystemPrint}
               loading={isPrinting}
+              style={{ 
+                backgroundColor: '#5D4037', 
+                borderColor: '#5D4037',
+                boxShadow: '0 2px 6px rgba(93, 64, 55, 0.2)' 
+              }}
+              disabled={!selectedBatch} // แก้ไขโดยลบเงื่อนไข || !generateQRCode
             >
               Print
             </Button>,
@@ -2811,6 +3206,11 @@ const BatchSearch: React.FC = () => {
                           icon={<SyncOutlined />}
                           onClick={handleResyncPreview}
                           loading={isResyncingPreview}
+                          style={{ 
+                            backgroundColor: '#5D4037', 
+                            borderColor: '#5D4037',
+                            boxShadow: '0 2px 6px rgba(93, 64, 55, 0.2)' 
+                          }}
                         >
                           Resync
                         </Button>

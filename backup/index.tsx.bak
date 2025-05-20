@@ -26,43 +26,6 @@ import { getFileInput, loadImageFile, downloadJsonTemplate } from '../../utils/t
 // Check if running on client side
 const isClient = typeof window !== 'undefined';
 
-// Function to detect language from text
-const detectLanguage = (text: string): string => {
-  if (!text) return 'latin';
-  
-  // Arabic character range
-  if (/[\u0600-\u06FF]/.test(text)) return 'arabic';
-  
-  // Hebrew character range
-  if (/[\u0590-\u05FF]/.test(text)) return 'hebrew';
-  
-  // Thai character range
-  if (/[\u0E00-\u0E7F]/.test(text)) return 'thai';
-  
-  // Japanese character ranges (Hiragana, Katakana, and Kanji)
-  if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'japanese';
-  
-  // Chinese character range
-  if (/[\u4E00-\u9FFF]/.test(text)) return 'chinese';
-  
-  // Korean character range
-  if (/[\uAC00-\uD7AF\u1100-\u11FF]/.test(text)) return 'korean';
-  
-  // Default to latin
-  return 'latin';
-};
-
-// ค่าสัมประสิทธิ์สำหรับภาษาต่าง ๆ
-const LANGUAGE_COEFFICIENTS = {
-  latin: { width: 0.6, height: 1.2 },
-  arabic: { width: 1.0, height: 1.6 },  // ลดค่าสัมประสิทธิ์เพื่อให้ค่าฟอนต์ไม่เล็กเกินไป
-  hebrew: { width: 0.9, height: 1.6 },  // ลดค่าสัมประสิทธิ์เพื่อให้ค่าฟอนต์ไม่เล็กเกินไป
-  thai: { width: 0.7, height: 1.4 },
-  japanese: { width: 1.0, height: 1.2 },
-  chinese: { width: 1.0, height: 1.2 },
-  korean: { width: 1.0, height: 1.2 }
-};
-
 // Import client-only modules
 let Stage: any = null;
 let Layer: any = null;
@@ -876,133 +839,15 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
    * Export template as PDF
    */
   const handleExportPdf = useCallback(() => {
-    try {
-      // ตรวจสอบว่า stageRef มีค่าหรือไม่
-      if (!stageRef.current) {
-        message.error('ไม่พบ stage สำหรับการส่งออก');
-        return;
-      }
-
-      // สร้าง dialog สำหรับแสดงสถานะการทำงาน
-      message.loading('กำลังสร้างไฟล์ PDF...', 0);
-
-      // ใช้ setTimeout เพื่อให้ UI มีเวลาอัปเดตก่อนการทำงานหนัก
-      setTimeout(async () => {
-        try {
-          // นำเข้า jspdf เมื่อต้องการใช้งาน
-          const { jsPDF } = await import('jspdf');
-
-          // ตั้งค่าคุณภาพของรูปภาพ
-          const pixelRatio = 2;  // คุณภาพสูงกว่าหน้าจอ 2 เท่า
-
-          // แปลง stage เป็น Data URL
-          const dataURL = stageRef.current.toDataURL({
-            pixelRatio,
-            mimeType: 'image/jpeg',
-            quality: 1,
-            width: canvasSize.width,
-            height: canvasSize.height
-          });
-
-          // กำหนดชื่อไฟล์
-          const filename = `${templateInfo.name || 'template'}-${batchNo || new Date().toISOString().slice(0, 10)}`;
-
-          // สร้าง PDF ด้วย jsPDF
-          const orientation = canvasSize.width > canvasSize.height ? 'landscape' : 'portrait';
-          const pdf = new jsPDF({
-            orientation,
-            unit: 'px',
-            format: [canvasSize.width, canvasSize.height],
-            hotfixes: ['px_scaling']
-          });
-
-          // เพิ่มรูปภาพลงใน PDF
-          pdf.addImage(
-            dataURL,
-            'JPEG',
-            0,
-            0,
-            canvasSize.width,
-            canvasSize.height
-          );
-
-          // บันทึก PDF
-          pdf.save(`${filename}.pdf`);
-
-          // แสดงข้อความสำเร็จ
-          message.destroy();
-          message.success('ส่งออกเป็น PDF สำเร็จ');
-        } catch (error) {
-          console.error('Error generating PDF:', error);
-          message.destroy();
-          message.error('ไม่สามารถสร้างไฟล์ PDF ได้');
-        }
-      }, 100);
-    } catch (error) {
-      message.destroy();
-      message.error('เกิดข้อผิดพลาดในการส่งออกเป็น PDF');
-      console.error('Error in PDF export:', error);
-    }
-  }, [stageRef, canvasSize, templateInfo.name, batchNo]);
+    message.info('Export to PDF feature is coming soon');
+  }, []);
 
   /**
    * Export template as PNG
    */
   const handleExportPng = useCallback(() => {
-    try {
-      // ตรวจสอบว่า stageRef มีค่าหรือไม่
-      if (!stageRef.current) {
-        message.error('ไม่พบ stage สำหรับการส่งออก');
-        return;
-      }
-
-      // แสดงสถานะการทำงาน
-      message.loading('กำลังสร้างไฟล์ PNG...', 0);
-
-      // ใช้ setTimeout เพื่อให้ UI มีเวลาอัปเดตก่อนการทำงานหนัก
-      setTimeout(() => {
-        try {
-          // ตั้งค่าคุณภาพของรูปภาพ
-          const pixelRatio = 3;  // คุณภาพสูงกว่าหน้าจอ 3 เท่า
-
-          // แปลง stage เป็น Data URL
-          const dataURL = stageRef.current.toDataURL({
-            pixelRatio,
-            mimeType: 'image/png',
-            quality: 1,
-            width: canvasSize.width,
-            height: canvasSize.height
-          });
-
-          // สร้างลิงก์สำหรับดาวน์โหลด
-          const link = document.createElement('a');
-          link.download = `${templateInfo.name || 'template'}-${batchNo || new Date().toISOString().slice(0, 10)}.png`;
-          link.href = dataURL;
-
-          // เพิ่มลิงก์ลงใน document แล้วคลิก
-          document.body.appendChild(link);
-          link.click();
-
-          // ล้าง resources
-          setTimeout(() => {
-            document.body.removeChild(link);
-          }, 100);
-
-          // แสดงข้อความสำเร็จ
-          message.destroy();
-          message.success('ส่งออกเป็น PNG สำเร็จ');
-        } catch (error) {
-          console.error('Error generating PNG:', error);
-          message.destroy();
-          message.error('ไม่สามารถสร้างไฟล์ PNG ได้');
-        }
-      }, 100);
-    } catch (error) {
-      message.destroy();
-      message.error('เกิดข้อผิดพลาดในการส่งออกเป็น PNG');
-      console.error('Error in PNG export:', error);
-    }
-  }, [stageRef, canvasSize, templateInfo.name, batchNo]);
+    message.info('Export to PNG feature is coming soon');
+  }, []);
 
   /**
    * Save template
@@ -1387,23 +1232,6 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         
         // คำนวณขนาดกล่องและฟอนต์ที่เหมาะสมสำหรับข้อความ
         const text = editingTextValue || '';
-        
-        // ตรวจสอบภาษาของข้อความ
-        const detectedLanguage = detectLanguage(text);
-        const isRTL = ['arabic', 'hebrew'].includes(detectedLanguage);
-        const isComplexScript = ['thai', 'japanese', 'chinese', 'korean'].includes(detectedLanguage);
-        
-        // ค่าสัมประสิทธิ์ตามภาษา - เพิ่มค่าเป็นพิเศษสำหรับอาหรับเพื่อให้มีพื้นที่เพียงพอ
-        const fontCoefficient = {
-          arabic: { width: 1.4, height: 2.0 },  // เพิ่มค่าสำหรับอาหรับ
-          hebrew: { width: 1.2, height: 2.0 },  // เพิ่มค่าสำหรับฮีบรู
-          thai: { width: 0.8, height: 1.5 },
-          japanese: { width: 1.0, height: 1.5 },
-          chinese: { width: 1.0, height: 1.5 },
-          korean: { width: 1.0, height: 1.5 },
-          latin: { width: 0.7, height: 1.3 },
-        }[detectedLanguage] || { width: 0.7, height: 1.3 };
-        
         const lines = text.split('\n');
         const lineCount = lines.length;
         const longestLineLength = Math.max(...lines.map(line => line.length));
@@ -1413,60 +1241,32 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         let newWidth, newHeight;
         
         // ปรับปรุงการคำนวณเพื่อให้ข้อความมีพื้นที่เพียงพอ
-        // ถ้าเป็นข้อความยาว (> 30 ตัวอักษร หรือมีหลายบรรทัด) หรือเป็นภาษาที่ซับซ้อน
-        if (longestLineLength > 30 || lineCount > 1 || isRTL || isComplexScript) {
+        // ถ้าเป็นข้อความยาว (> 30 ตัวอักษร หรือมีหลายบรรทัด)
+        if (longestLineLength > 30 || lineCount > 1) {
           // จำกัดความกว้างไม่ให้เกิน 500px และไม่เกิน 80% ของ canvas
           const maxWidth = Math.min(500, canvasSize.width * 0.8);
           
-          // ประมาณความกว้างขั้นต้นโดยใช้สัมประสิทธิ์ตามภาษา
-          if (isRTL) {
-            // สำหรับภาษา RTL เพิ่มความกว้างมากขึ้น
-            newWidth = Math.min(maxWidth, Math.max(200, longestLineLength * fontSize * fontCoefficient.width * 1.2));
-            
-            // ถ้าข้อความยาวมาก เพิ่มความกว้างอีก
-            if (longestLineLength > 20) {
-              newWidth *= 1.2;
-            } else if (longestLineLength > 10) {
-              newWidth *= 1.1;
-            }
-          } else if (isComplexScript) {
-            // สำหรับภาษาที่ซับซ้อนอื่นๆ
-            newWidth = Math.min(maxWidth, Math.max(200, longestLineLength * fontSize * fontCoefficient.width));
-          } else {
-            // สำหรับภาษาละติน
-            newWidth = Math.min(maxWidth, Math.max(200, longestLineLength * fontSize * fontCoefficient.width));
-          }
-          
-          // คำนวณความสูงจากฟอนต์ไซส์และจำนวนบรรทัด ใช้ค่าตามภาษา
-          let heightMultiplier = fontCoefficient.height;
-          
-          if (lineCount > 1) {
-            heightMultiplier *= 1 + (lineCount - 1) * 0.15; // เพิ่ม 15% ต่อบรรทัดที่เพิ่มขึ้น
-          }
-          
-          newHeight = Math.max(fontSize * 1.8, lineCount * fontSize * heightMultiplier);
+          // ประมาณความกว้างขั้นต้นโดยใช้สัมประสิทธิ์ที่สูงขึ้น
+          newWidth = Math.min(maxWidth, Math.max(200, longestLineLength * fontSize * 0.7));
           
           // คำนวณขนาดฟอนต์ที่เหมาะสม
-          const estimatedFontSizeByWidth = newWidth / (Math.max(1, longestLineLength) * fontCoefficient.width);
-          const estimatedFontSizeByHeight = newHeight / (lineCount * heightMultiplier);
-          let calculatedFontSize = Math.min(estimatedFontSizeByWidth, estimatedFontSizeByHeight);
+          const estimatedFontSizeByWidth = newWidth / (Math.max(1, longestLineLength) * 0.65);
+          const estimatedFontSizeByHeight = element.height / (lineCount * 1.2);
+          const calculatedFontSize = Math.min(estimatedFontSizeByWidth, estimatedFontSizeByHeight);
           
           // ปรับขนาดฟอนต์ลงถ้าข้อความยาวมาก
           if (longestLineLength > 50 || lineCount > 3) {
-            fontSize = Math.max(12, Math.min(16, calculatedFontSize));
+            fontSize = Math.max(MIN_FONT_SIZE, Math.min(16, calculatedFontSize));
           } else {
-            fontSize = Math.max(12, Math.min(fontSize, calculatedFontSize));
+            fontSize = Math.max(MIN_FONT_SIZE, Math.min(fontSize, calculatedFontSize));
           }
           
-          // สำหรับภาษา RTL เพิ่มขนาดกล่องขึ้นอีก
-          if (isRTL) {
-            // เพิ่มขนาดกล่องอีก 40% สำหรับภาษาอาหรับ
-            newWidth = Math.min(newWidth * 1.4, canvasSize.width * 0.95);
-          }
+          // คำนวณความสูงจากขนาดฟอนต์และจำนวนบรรทัด - เพิ่มพื้นที่ด้านสูงเล็กน้อย
+          newHeight = Math.max(fontSize * 1.8, lineCount * fontSize * 1.4);
         } else {
           // ถ้าเป็นข้อความสั้น คำนวณให้มีพื้นที่เพียงพอ
-          newWidth = Math.max(150, longestLineLength * fontSize * fontCoefficient.width);
-          newHeight = Math.max(35, fontSize * fontCoefficient.height);
+          newWidth = Math.max(150, longestLineLength * fontSize * 0.8);
+          newHeight = Math.max(35, fontSize * 1.8);
         }
         
         // ตรวจสอบให้แน่ใจว่ากล่องอยู่ในขอบเขตของ canvas
@@ -1500,26 +1300,15 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         // ตรวจสอบอีกครั้งว่าฟอนต์ไซส์เหมาะสมกับขนาดกล่องหลังจากปรับ
         fontSize = Math.min(fontSize, newWidth / 2, newHeight * 0.8);
         
-        // ปัดให้เป็นจำนวนเต็มเสมอ และไม่น้อยกว่า 12
-        fontSize = Math.round(Math.max(12, fontSize));
-        
-        // เตรียมข้อมูลที่จะอัพเดต
-        const updateData: any = {
+        // อัพเดตข้อความและคุณสมบัติอื่นๆทั้งหมดในครั้งเดียว
+        handleElementEdit(selectedId, {
           text: editingTextValue,
           fontSize: fontSize,
-          width: Math.round(newWidth),
-          height: Math.round(newHeight),
-          x: Math.round(newX),
-          y: Math.round(newY)
-        };
-        
-        // สำหรับภาษา RTL ให้จัดตำแหน่งเป็น right โดยอัตโนมัติถ้ายังไม่ได้ตั้งค่า
-        if (isRTL && (!element.align || element.align === 'left')) {
-          updateData.align = 'right';
-        }
-        
-        // อัพเดตข้อความและคุณสมบัติอื่นๆทั้งหมดในครั้งเดียว
-        handleElementEdit(selectedId, updateData);
+          width: newWidth,
+          height: newHeight,
+          x: newX,
+          y: newY
+        });
 
         // แสดงข้อความยืนยันการแก้ไข
         message.success('ข้อความถูกอัพเดตเรียบร้อยแล้ว');
@@ -1851,204 +1640,47 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                                 const textElement = el as any; // TextElement
                                 const text = textElement.text || '';
                                 
-                                // ตรวจสอบภาษาของข้อความ
-                                const detectedLanguage = detectLanguage(text);
-                                const isRTL = ['arabic', 'hebrew'].includes(detectedLanguage);
-                                const isComplexScript = ['thai', 'japanese', 'chinese', 'korean'].includes(detectedLanguage);
+                                // คำนวณฟอนต์ใหม่เมื่อมีการเปลี่ยนขนาดกล่องอย่างมีนัยสำคัญ
+                                const significantResize = 
+                                  Math.abs(newWidth - el.width) > el.width * 0.15 || 
+                                  Math.abs(newHeight - el.height) > el.height * 0.15;
                                 
-                                // กำหนดค่าแนวทางการคำนวณจากพารามิเตอร์ต่างๆ
-                                const CANVAS_PADDING = 20; // padding จากขอบ canvas
-                                const MAX_LINE_LENGTH = isRTL ? 30 : 40; // ความยาวสูงสุดต่อบรรทัด
-                                
-                                // นับจำนวนบรรทัดและความยาวสูงสุดของบรรทัด
-                                const lines = text.split('\n');
-                                const initialLineCount = lines.length || 1;
-                                const longestLineLength = Math.max(...lines.map(line => line.length));
-                                
-                                // ค่าสัมประสิทธิ์พื้นฐานสำหรับการคำนวณฟอนต์
-                                let widthMultiplier = 0.7;  // ค่าเริ่มต้นสำหรับภาษาละติน
-                                let heightMultiplier = 1.2;
-                                
-                                // ปรับค่าสัมประสิทธิ์ตามภาษา
-                                if (isRTL) {
-                                  // ลดค่าสัมประสิทธิ์ลงเพื่อให้ค่าฟอนต์ไซส์ไม่เล็กเกินไป
-                                  widthMultiplier = 0.5; // ค่าน้อยลงหมายถึงฟอนต์ใหญ่ขึ้น
-                                  heightMultiplier = 1.2;
-                                } else if (isComplexScript) {
-                                  widthMultiplier = 0.6;
-                                  heightMultiplier = 1.3;
-                                }
-                                
-                                // คำนวณความยาวต่อบรรทัดที่เหมาะสมสำหรับฟอนต์ไซส์นี้
-                                const fontSize = textElement.fontSize || DEFAULT_FONT_SIZE;
-                                const maxCharsPerLine = Math.floor(Math.max(1, updatedEl.width / (fontSize * widthMultiplier)));
-                                
-                                // คำนวณการแบ่งข้อความเป็นบรรทัดใหม่ถ้าข้อความยาวเกินไป
-                                let formattedText = text;
-                                let estimatedLineCount = initialLineCount;
-                                
-                                // เก็บข้อความดั้งเดิมไว้หากยังไม่เคยเก็บ
-                                if (!textElement.originalText) {
-                                  // หาข้อความต้นฉบับจากการรวมทุกบรรทัดที่อาจถูกตัดแบ่งโดยอัตโนมัติ
-                                  // แต่ยังคงรักษาการขึ้นบรรทัดใหม่ที่ผู้ใช้ตั้งใจใส่เอง
-                                  const originalLines = [];
-                                  let tempLine = '';
+                                if (significantResize) {
+                                  // คำนวณขนาดฟอนต์ตามความกว้างของกล่อง
+                                  const lineCount = text.split('\n').length || 1;
                                   
-                                  for (let i = 0; i < lines.length; i++) {
-                                    const line = lines[i];
-                                    
-                                    // ถ้าบรรทัดนี้สั้นกว่า maxCharsPerLine และไม่ใช่บรรทัดสุดท้าย
-                                    // และบรรทัดถัดไปก็สั้นด้วย ให้สันนิษฐานว่าเป็นการกด Enter โดยผู้ใช้
-                                    if (line.length < maxCharsPerLine && i < lines.length - 1 && 
-                                        lines[i+1].length < maxCharsPerLine) {
-                                      if (tempLine) {
-                                        originalLines.push(tempLine);
-                                        tempLine = '';
-                                      }
-                                      originalLines.push(line);
-                                    } else {
-                                      // มิฉะนั้น สันนิษฐานว่าเป็นการตัดบรรทัดอัตโนมัติ
-                                      if (tempLine) {
-                                        tempLine += ' ' + line.trim();
-                                      } else {
-                                        tempLine = line;
-                                      }
-                                    }
-                                  }
+                                  // คำนวณขนาดฟอนต์จากความกว้างและความสูง
+                                  const estimatedFontSizeByWidth = newWidth / (Math.max(1, text.length) * FONT_SIZE_COEFFICIENT);
+                                  const estimatedFontSizeByHeight = newHeight / (lineCount * 1.2);
                                   
-                                  // เพิ่มบรรทัดสุดท้ายถ้ายังมีข้อความค้างอยู่
-                                  if (tempLine) {
-                                    originalLines.push(tempLine);
-                                  }
+                                  // เลือกค่าที่เล็กกว่าและจำกัดให้อยู่ในช่วงที่เหมาะสม
+                                  const calculatedFontSize = Math.min(estimatedFontSizeByWidth, estimatedFontSizeByHeight);
                                   
-                                  (updatedEl as any).originalText = originalLines.join('\n');
-                                }
-                                
-                                // ใช้ข้อความต้นฉบับมาคำนวณการแบ่งบรรทัดใหม่ตามขนาดกล่องปัจจุบัน
-                                const originalText = (updatedEl as any).originalText || text;
-                                const originalLines = originalText.split('\n');
-                                const newLines = [];
-                                estimatedLineCount = 0;
-                                
-                                // วนลูปแต่ละบรรทัดในข้อความต้นฉบับ (ที่ผู้ใช้ใส่เอง)
-                                for (const line of originalLines) {
-                                  if (line.length <= maxCharsPerLine) {
-                                    // ถ้าบรรทัดนี้สั้นพอที่จะอยู่ในบรรทัดเดียว
-                                    newLines.push(line);
-                                    estimatedLineCount++;
-                                  } else {
-                                    // ถ้าบรรทัดนี้ยาวเกินไป ต้องแบ่งให้สั้นลง
-                                    let remainingText = line;
-                                    while (remainingText.length > 0) {
-                                      let breakPoint = Math.min(maxCharsPerLine, remainingText.length);
-                                      
-                                      // พยายามตัดที่ช่องว่างเพื่อไม่ให้ตัดกลางคำ
-                                      if (breakPoint < remainingText.length) {
-                                        let spacePos = remainingText.lastIndexOf(' ', breakPoint);
-                                        if (spacePos > breakPoint / 2) { // ถ้าพบช่องว่างที่ไม่ไกลเกินไป
-                                          breakPoint = spacePos + 1; // +1 เพื่อเอาช่องว่างไปด้วย
-                                        }
-                                      }
-                                      
-                                      newLines.push(remainingText.substring(0, breakPoint).trim());
-                                      remainingText = remainingText.substring(breakPoint).trim();
-                                      estimatedLineCount++;
-                                    }
+                                  // จำกัดขนาดฟอนต์ไม่ให้ใหญ่เกินขนาดของกล่อง
+                                  const maxFontSize = Math.min(newWidth / 2, newHeight * 0.8);
+                                  const newFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, calculatedFontSize, maxFontSize));
+                                  
+                                  // อัพเดตค่าฟอนต์ไปที่อิลิเมนต์ที่จะอัพเดต
+                                  (updatedEl as any).fontSize = newFontSize;
+                                } else {
+                                  // แม้ไม่มีการเปลี่ยนขนาดกล่องมากนัก ยังต้องตรวจสอบว่าฟอนต์ไซส์ไม่เกินขนาดกล่อง
+                                  const currentFontSize = textElement.fontSize || DEFAULT_FONT_SIZE;
+                                  const maxFontSize = Math.min(newWidth / 2, newHeight * 0.8);
+                                  
+                                  if (currentFontSize > maxFontSize) {
+                                    (updatedEl as any).fontSize = maxFontSize;
                                   }
-                                }
-                                
-                                // อัพเดตข้อความใหม่
-                                formattedText = newLines.join('\n');
-                                if ('text' in updatedEl) {
-                                  updatedEl.text = formattedText;
-                                }
-                                
-                                // เพิ่มขนาดกล่องสำหรับภาษา RTL โดยเฉพาะอาราบิก
-                                if (isRTL) {
-                                  // เพิ่มขนาดกล่องอีก 60% สำหรับภาษาอาราบิกและฮีบรู 
-                                  // แต่ต้องไม่เกินขนาด canvas
-                                  const boxWidth = Math.min(newWidth * 1.6, canvasSize.width - CANVAS_PADDING * 2);
-                                  updatedEl.width = boxWidth;
-                                }
-                                
-                                // ปรับตัวคูณตามความยาวของข้อความ
-                                if (longestLineLength > 20) {
-                                  widthMultiplier *= 1.1;
-                                } else if (longestLineLength > 10 && isRTL) {
-                                  widthMultiplier *= 0.9; // ลดลงเพื่อให้ฟอนต์ใหญ่ขึ้นสำหรับข้อความอาราบิกสั้นๆ
-                                }
-                                
-                                // ถ้ามีหลายบรรทัด เพิ่มเชิงเส้นสำหรับแต่ละบรรทัด
-                                if (estimatedLineCount > 1) {
-                                  heightMultiplier *= 1 + (estimatedLineCount - 1) * 0.2;
-                                }
-                                
-                                // คำนวณขนาดฟอนต์ตามความกว้างและความสูง
-                                const charWidth = fontSize * widthMultiplier;
-                                const lineHeight = fontSize * heightMultiplier;
-                                
-                                // ใช้ค่าที่น้อยกว่าเพื่อให้แน่ใจว่าข้อความจะอยู่ในกรอบ
-                                const estimatedFontSizeByWidth = updatedEl.width / (Math.max(1, maxCharsPerLine) * widthMultiplier);
-                                const estimatedFontSizeByHeight = updatedEl.height / (estimatedLineCount * heightMultiplier);
-                                
-                                let calculatedFontSize = Math.min(estimatedFontSizeByWidth, estimatedFontSizeByHeight);
-                                
-                                // สำหรับภาษาอาราบิก ให้มีค่าฟอนต์ไซส์ขั้นต่ำที่สูงกว่า
-                                const minFontSize = isRTL ? 14 : 12;
-                                
-                                // ปรับค่าฟอนต์ไซส์ให้อยู่ในช่วงที่เหมาะสม (12-72) และปัดเป็นจำนวนเต็ม
-                                let newFontSize = Math.round(Math.max(minFontSize, Math.min(72, calculatedFontSize)));
-                                
-                                // สำหรับภาษาอาราบิก อย่าให้ฟอนต์ไซส์เล็กเกินไป
-                                if (isRTL) {
-                                  // กำหนดค่าขั้นต่ำเป็นพิเศษสำหรับภาษาอาราบิก
-                                  newFontSize = Math.max(newFontSize, 14);
-                                }
-                                
-                                // เพิ่ม padding ในกล่องข้อความ
-                                const boxPadding = fontSize * 0.1; // ลดลงจาก 0.3 เป็น 0.1
-                                updatedEl.width += boxPadding; // ลดลงจาก boxPadding * 2 เป็น boxPadding เดียว
-                                // ไม่เพิ่ม padding สำหรับความสูง
-                                // updatedEl.height += boxPadding;
-                                
-                                // อัพเดตค่าฟอนต์ไปที่อิลิเมนต์ที่จะอัพเดต
-                                (updatedEl as any).fontSize = newFontSize;
-                                
-                                // สำหรับภาษา RTL ให้จัดตำแหน่งเป็น right โดยอัตโนมัติถ้ายังไม่ได้ตั้งค่า
-                                if (isRTL && (!textElement.align || textElement.align === 'left')) {
-                                  (updatedEl as any).align = 'right';
-                                }
-                                
-                                // ตรวจสอบและจำกัดขนาดไม่ให้เกินขอบ canvas
-                                const maxWidth = canvasSize.width - CANVAS_PADDING * 2;
-                                const maxHeight = canvasSize.height - CANVAS_PADDING * 2;
-                                
-                                if (updatedEl.width > maxWidth) {
-                                  updatedEl.width = maxWidth;
-                                }
-                                
-                                if (updatedEl.height > maxHeight) {
-                                  updatedEl.height = maxHeight;
-                                }
-                                
-                                // ตรวจสอบว่ากล่องยังอยู่ในขอบเขต canvas หรือไม่
-                                if (updatedEl.x + updatedEl.width > canvasSize.width - CANVAS_PADDING) {
-                                  updatedEl.x = Math.max(CANVAS_PADDING, canvasSize.width - CANVAS_PADDING - updatedEl.width);
-                                }
-                                
-                                if (updatedEl.y + updatedEl.height > canvasSize.height - CANVAS_PADDING) {
-                                  updatedEl.y = Math.max(CANVAS_PADDING, canvasSize.height - CANVAS_PADDING - updatedEl.height);
                                 }
                               }
                               
                               // ตรวจสอบและจำกัดขนาดสุดท้ายไม่ให้เกิน canvas
                               if (updatedEl.width > canvasSize.width) {
-                                updatedEl.width = canvasSize.width - 40; // เว้น padding ด้านละ 20px
-                                updatedEl.x = 20; // จัดให้อยู่ชิดขอบซ้ายพร้อม padding
+                                updatedEl.width = canvasSize.width;
+                                updatedEl.x = 0;
                               }
                               if (updatedEl.height > canvasSize.height) {
-                                updatedEl.height = canvasSize.height - 40; // เว้น padding ด้านละ 20px
-                                updatedEl.y = 20; // จัดให้อยู่ชิดขอบบนพร้อม padding
+                                updatedEl.height = canvasSize.height;
+                                updatedEl.y = 0;
                               }
                               
                               updateElement(updatedEl);

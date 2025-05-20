@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using FgLabel.Api.Models;
 using FgLabel.Api.Services;
+using System.Data;
+using Dapper;
 
 namespace FgLabel.Api.Controllers
 {
@@ -13,13 +15,16 @@ namespace FgLabel.Api.Controllers
     {
         private readonly ITemplateService _templateService;
         private readonly ILogger<TemplateController> _logger;
+        private readonly IDbConnection _connection;
         
         public TemplateController(
             ITemplateService templateService,
-            ILogger<TemplateController> logger)
+            ILogger<TemplateController> logger,
+            IDbConnection connection)
         {
             _templateService = templateService;
             _logger = logger;
+            _connection = connection;
         }
         
         /// <summary>
@@ -101,6 +106,43 @@ namespace FgLabel.Api.Controllers
             {
                 _logger.LogError(ex, "Error getting template {TemplateId}", id);
                 return StatusCode(500, new { error = "An error occurred while retrieving the template" });
+            }
+        }
+        
+        /// <summary>
+        /// Lookup template by product and customer keys
+        /// </summary>
+        [HttpGet("lookup")]
+        public async Task<IActionResult> Lookup([FromQuery] string? productKey, [FromQuery] string? customerKey)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(productKey) && string.IsNullOrEmpty(customerKey))
+                {
+                    return BadRequest(new { error = "At least one of productKey or customerKey must be provided" });
+                }
+                
+                // เรียกใช้ stored procedure เพื่อค้นหา template
+                var result = await _connection.QueryFirstOrDefaultAsync<dynamic>(
+                    "FgL.GetTemplateByProductAndCustomerKeys",
+                    new { productKey, customerKey },
+                    commandType: CommandType.StoredProcedure
+                );
+                
+                // ถ้าไม่พบ template
+                if (result == null || result?.TemplateID == null)
+                {
+                    return NotFound(new { error = "No template found for the specified product and customer keys" });
+                }
+                
+                return Ok(new { templateID = result?.TemplateID });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error looking up template by product key {ProductKey} and customer key {CustomerKey}", 
+                    productKey ?? "(null)", 
+                    customerKey ?? "(null)");
+                return StatusCode(500, new { error = "An error occurred while looking up the template" });
             }
         }
     }

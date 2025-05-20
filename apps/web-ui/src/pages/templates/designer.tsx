@@ -46,6 +46,30 @@ export default function DesignerPage() {
             // ตรวจสอบว่ามี elements หรือไม่
             if (templateData.elements && Array.isArray(templateData.elements)) {
               console.log(`Found ${templateData.elements.length} elements in localStorage template`);
+              
+              // ปรับแต่ง elements ก่อนใช้งาน
+              templateData.elements = templateData.elements.map(el => {
+                if (el.type === 'barcode') {
+                  console.log(`Adjusting barcode element properties for consistent display, original height: ${el.height}`);
+                  return {
+                    ...el,
+                    // กำหนดความสูงคงที่ 70px (50px สำหรับแท่ง barcode + 20px สำหรับข้อความด้านล่าง)
+                    // การแสดงผลจริงจะแยกเป็น:
+                    // - ส่วนแท่งบาร์โค้ด 50px (แสดงโดย Image จาก dataUrl ที่สร้างใน useQrAndBarcode)
+                    // - ส่วนข้อความด้านล่าง 20px (แสดงโดย Text component แยกต่างหาก)
+                    height: 70,
+                    format: el.format || 'CODE128',
+                    fontSize: 14, // ค่าคงที่สำหรับข้อความใต้บาร์โค้ด ตรงกับ batch-search.tsx
+                    fontFamily: el.fontFamily || 'monospace',
+                    textAlign: el.textAlign || 'center',
+                    textPosition: el.textPosition || 'bottom',
+                    textMargin: el.textMargin || 2,
+                    margin: el.margin || 5,
+                    displayValue: true
+                  };
+                }
+                return el;
+              });
             }
             
             setInitialTemplate(templateData);

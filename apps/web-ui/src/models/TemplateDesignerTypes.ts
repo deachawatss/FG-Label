@@ -53,6 +53,7 @@ export interface QrElement extends BaseElement {
 export interface RectElement extends BaseElement {
   type: 'rect';
   fill: string;
+  cornerRadius?: number;
 }
 
 export interface EllipseElement extends BaseElement {
@@ -63,6 +64,8 @@ export interface EllipseElement extends BaseElement {
 export interface LineElement extends BaseElement {
   type: 'line';
   fill: string;
+  strokeWidth?: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
 }
 
 export interface ArrowElement extends BaseElement {
@@ -85,9 +88,15 @@ export interface VariableElement extends BaseElement {
   defaultValue?: string;
 }
 
+export interface GroupElement extends BaseElement {
+  type: 'group';
+  elements: ElementType[];
+  fill?: string;
+}
+
 export type ElementType = TextElement | BarcodeElement | QrElement | RectElement | 
                   EllipseElement | LineElement | ArrowElement | ImageElement | 
-                  VariableElement;
+                  VariableElement | GroupElement;
 
 export interface CanvasSize {
   width: number; 
@@ -112,7 +121,7 @@ export interface Point {
 export interface ToolboxItem {
   type: string;
   label: string;
-  icon: React.ReactNode;
+  icon: React.ReactNode | string;
 }
 
 export interface FeaturesConfig {
@@ -134,6 +143,7 @@ export interface FeaturesConfig {
   CANVAS: {
     INIT_WIDTH: number;
     INIT_HEIGHT: number;
+    CONSTRAIN_ELEMENTS?: boolean;
   };
   KEYBOARD: {
     DELETE: string;
