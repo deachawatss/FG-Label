@@ -748,12 +748,12 @@ public class Program
             catch (SqlException ex)
             {
                 logger.LogError(ex, "SQL Error getting batch info for BatchNo: {BatchNo}, Error: {Message}", batchNo, ex.Message);
-                return Results.Problem($"Database error: {ex.Message}");
+                return Results.Problem($"Database error: {ex.Message}", statusCode: 500);
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Error getting batch info for BatchNo: {BatchNo}, Error: {Message}", batchNo, ex.Message);
-                return Results.Problem($"Error getting batch info: {ex.Message}");
+                return Results.Problem($"Error getting batch info: {ex.Message}", statusCode: 500);
             }
         }).RequireAuthorization();
 
@@ -772,7 +772,6 @@ public class Program
                         SELECT TOP (20) * 
                         FROM FgL.vw_Label_PrintSummary WITH (NOLOCK)
                         WHERE BatchNo IS NOT NULL AND BatchNo NOT LIKE '%.%'  -- กรองบัตชที่มีจุด
-                        AND BatchTicketDate > DATEADD(MONTH, -3, GETDATE()) -- เพิ่มเงื่อนไขกรองเฉพาะรายการ 3 เดือนล่าสุดเพื่อความเร็ว
                         ORDER BY BatchTicketDate DESC";
                         
                     try
@@ -897,6 +896,53 @@ public class Program
                     detail: ex.Message,
                     statusCode: 500
                 );
+            }
+        }).RequireAuthorization();
+
+        /* ---------- 4.2.3  GET /api/batches/sqlview ----------------------- */
+        app.MapGet("/api/batches/sqlview", async ([FromQuery] string batchNo, [FromServices] IDbConnection db, ILogger<Program> logger) =>
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(batchNo))
+                {
+                    return Results.BadRequest("Parameter batchNo is required");
+                }
+
+                logger.LogInformation($"Fetching data directly from SQL View for batchNo: {batchNo}");
+
+                // คิวรี่ข้อมูลจาก SQL View โดยตรง
+                var sql = @"
+                    SELECT * FROM FgL.vw_Label_PrintSummary 
+                    WHERE BatchNo = @BatchNo
+                    ORDER BY ItemKey, CustKey";
+
+                var result = await db.QueryAsync(sql, new { BatchNo = batchNo });
+
+                if (!result.Any())
+                {
+                    logger.LogWarning($"No data found in SQL View for batchNo: {batchNo}");
+                    return Results.NotFound($"No data found for batch: {batchNo}");
+                }
+
+                logger.LogInformation($"Successfully retrieved {result.Count()} records from SQL View for batchNo: {batchNo}");
+                
+                // บันทึกข้อมูล ShipToCountry เพื่อการดีบัก
+                foreach (var row in result)
+                {
+                    string custKey = row.CustKey?.ToString() ?? "N/A";
+                    string itemKey = row.ItemKey?.ToString() ?? "N/A";
+                    string shipToCountry = row.SHIPTO_COUNTRY?.ToString() ?? "null";
+                    
+                    logger.LogInformation($"Record CustKey: {custKey}, ItemKey: {itemKey}, ShipToCountry: {shipToCountry}");
+                }
+
+                return Results.Ok(result);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, $"Error fetching data from SQL View for batchNo: {batchNo}");
+                return Results.Problem($"Internal server error: {ex.Message}", statusCode: 500);
             }
         }).RequireAuthorization();
 
@@ -1556,68 +1602,52 @@ public class Program
             {
                 return Results.Problem($"Error creating standard template: {ex.Message}");
             }
-        });
-
-        /* ---------- 4.8  GET /api/printers --------------------------------- */
-        app.MapGet("/api/printers", async ([FromServices] IDbConnection db, ILogger<Program> logger) => 
-        {
-            try 
-            {
-                logger.LogInformation("Fetching list of printers");
-                var printers = await db.QueryAsync<PrinterProfile>(@"
-                    SELECT PrinterID, Name, Description, Location, Model, Dpi,
-                           CommandSet, IsDefault, Active, CreatedAt
-                    FROM FgL.PrinterProfile
-                    WHERE Active = 1
-                    ORDER BY IsDefault DESC, Name ASC");
-                
-                logger.LogInformation("Successfully retrieved {Count} printers", printers.Count());
-                return Results.Ok(printers);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error retrieving printer list: {Message}", ex.Message);
-                return Results.Problem(
-                    title: "Error retrieving printer list",
-                    detail: ex.Message,
-                    statusCode: 500
-                );
-            }
         }).RequireAuthorization();
-        
-        app.MapGet("/api/printers/{id}", async (int id, [FromServices] IDbConnection db, ILogger<Program> logger) => 
+
+        /* ---------- 4.9  DELETE /api/templates/{id} ------------------------------- */
+        app.MapDelete("/api/templates/{id}", async (int id, IDbConnection db, ILogger<Program> logger, ITemplateService templateService) =>
         {
-            try 
+            try
             {
-                logger.LogInformation("Fetching printer with ID: {Id}", id);
-                var printer = await db.QuerySingleOrDefaultAsync<PrinterProfile>(@"
-                    SELECT PrinterID, Name, Description, Location, Model, Dpi,
-                           CommandSet, IsDefault, Active, CreatedAt
-                    FROM FgL.PrinterProfile
-                    WHERE PrinterID = @Id", new { Id = id });
+                logger.LogInformation("Deleting template ID {TemplateID}", id);
                 
-                if (printer == null)
+                // ตรวจสอบว่ามี template นี้หรือไม่
+                var template = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    "SELECT TemplateID FROM FgL.LabelTemplate WHERE TemplateID = @TemplateID AND Active = 1", 
+                    new { TemplateID = id });
+                    
+                if (template == null)
                 {
-                    logger.LogWarning("Printer with ID {Id} not found", id);
-                    return Results.NotFound();
+                    return Results.NotFound($"Template with ID {id} not found or already inactive");
                 }
                 
-                logger.LogInformation("Successfully retrieved printer with ID: {Id}", id);
-                return Results.Ok(printer);
+                // เรียกใช้ service method ที่มีอยู่แล้วเพื่อลบ template
+                var success = await templateService.DeleteTemplateAsync(id);
+                
+                if (!success)
+                {
+                    return Results.Problem(
+                        title: "Failed to delete template",
+                        statusCode: 500
+                    );
+                }
+                
+                logger.LogInformation("Successfully deleted template ID {TemplateID}", id);
+                return Results.NoContent();
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error retrieving printer with ID {Id}: {Message}", id, ex.Message);
+                logger.LogError(ex, "Error deleting template {TemplateID}: {Message}", id, ex.Message);
                 return Results.Problem(
-                    title: "Error retrieving printer",
+                    title: "Error deleting template",
                     detail: ex.Message,
                     statusCode: 500
                 );
             }
         }).RequireAuthorization();
 
-        // GET /templates/lookup - ค้นหา template จาก productKey และ customerKey
-        app.MapGet("/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, ILogger<Program> logger) =>
+        // GET /api/templates/lookup - ค้นหา template จาก productKey และ customerKey
+        app.MapGet("/api/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, ILogger<Program> logger) =>
         {
             if (string.IsNullOrEmpty(productKey) && string.IsNullOrEmpty(customerKey))
             {
@@ -1634,16 +1664,65 @@ public class Program
                 );
                 
                 // ถ้าไม่พบ template จะได้ result ที่มีค่า templateID เป็น null
-                if (result == null || result.TemplateID == null)
+                if (result == null)
                 {
                     return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
                 }
                 
-                return Results.Ok(new { templateID = result.TemplateID });
+                var templateId = result?.TemplateID;
+                if (templateId == null)
+                {
+                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                }
+                
+                return Results.Ok(new { templateID = templateId });
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Error looking up template by product and customer keys");
+                return Results.Problem(
+                    title: "Error looking up template",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
+            }
+        }).RequireAuthorization();
+
+        // เพิ่ม endpoint เดิม /templates/lookup เพื่อรักษาความเข้ากันได้กับการเรียกใช้งานเดิม
+        app.MapGet("/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, ILogger<Program> logger) =>
+        {
+            // เหมือนกับ endpoint /api/templates/lookup
+            if (string.IsNullOrEmpty(productKey) && string.IsNullOrEmpty(customerKey))
+            {
+                return Results.BadRequest(new { message = "At least one of productKey or customerKey must be provided" });
+            }
+            
+            try
+            {
+                // เรียกใช้ stored procedure ค้นหา template โดยใช้ productKey และ customerKey
+                var result = await connection.QueryFirstOrDefaultAsync<dynamic>(
+                    "FgL.GetTemplateByProductAndCustomerKeys",
+                    new { productKey, customerKey },
+                    commandType: System.Data.CommandType.StoredProcedure
+                );
+                
+                // ถ้าไม่พบ template จะได้ result ที่มีค่า templateID เป็น null
+                if (result == null)
+                {
+                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                }
+                
+                var templateId = result?.TemplateID;
+                if (templateId == null)
+                {
+                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                }
+                
+                return Results.Ok(new { templateID = templateId });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error looking up template by product and customer keys (legacy endpoint)");
                 return Results.Problem(
                     title: "Error looking up template",
                     detail: ex.Message,

@@ -100,6 +100,8 @@ namespace FgLabel.Api.Models
         public string? Address_3 { get; set; }
         public string? City { get; set; }
         public string? State { get; set; }
+        public string? Country { get; set; }
+        public string? ShipToCountry { get; set; }
         
         // ข้อมูลน้ำหนัก/จำนวนถุง
         public decimal? TotalWeightKG { get; set; }

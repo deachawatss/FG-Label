@@ -1,5 +1,5 @@
-import React, { memo } from 'react';
-import { Button, Tooltip, Input, Space, Typography } from 'antd';
+import React, { memo, useState, useEffect } from 'react';
+import { Button, Tooltip, Input, Space, Typography, Dropdown, Menu, Popover, List, Empty } from 'antd';
 import { 
   SaveOutlined, 
   UndoOutlined, 
@@ -14,8 +14,20 @@ import {
   GroupOutlined,
   ScissorOutlined,
   FilePdfOutlined,
-  FileImageOutlined
+  FileImageOutlined,
+  HistoryOutlined,
+  DownOutlined,
+  ReloadOutlined
 } from '@ant-design/icons';
+
+// Interface for batch history
+interface BatchHistory {
+  batchNo: string;
+  timestamp: number;
+}
+
+// Key for storing history in localStorage
+const BATCH_HISTORY_KEY = 'fglabel_batch_history';
 
 interface DesignerToolbarProps {
   onSave: () => void;
@@ -48,7 +60,8 @@ interface DesignerToolbarProps {
   isPreviewing?: boolean;
   zoom: number;
   batchNo?: string;
-  onBatchNoChange?: React.Dispatch<React.SetStateAction<string>>;
+  onBatchNoChange?: (newBatchNo: string) => void;
+  batchError?: string | null;
   onApplyBatchData?: () => void;
   isBatchLoading?: boolean;
 }
@@ -88,9 +101,203 @@ export const DesignerToolbar: React.FC<DesignerToolbarProps> = memo(({
   zoom,
   batchNo = '',
   onBatchNoChange,
+  batchError,
   onApplyBatchData,
   isBatchLoading = false
 }) => {
+  // State for batch history
+  const [batchHistory, setBatchHistory] = useState<BatchHistory[]>([]);
+  const [historyVisible, setHistoryVisible] = useState(false);
+  
+  // Load batch history from localStorage when component mounts
+  useEffect(() => {
+    loadBatchHistory();
+  }, []);
+  
+  // Save batch history when batchNo changes and Apply is clicked
+  useEffect(() => {
+    if (batchNo && isBatchLoading === false) {
+      saveBatchHistory(batchNo);
+    }
+  }, [batchNo, isBatchLoading]);
+  
+  // Function to load batch history from localStorage
+  const loadBatchHistory = () => {
+    try {
+      const historyJson = localStorage.getItem(BATCH_HISTORY_KEY);
+      if (historyJson) {
+        const history = JSON.parse(historyJson) as BatchHistory[];
+        // Sort by timestamp (newest first)
+        const sortedHistory = history.sort((a, b) => b.timestamp - a.timestamp);
+        // Remove duplicates, keeping only the latest entry for each batchNo
+        const uniqueHistory = sortedHistory.filter((item, index, self) => 
+          index === self.findIndex(t => t.batchNo === item.batchNo)
+        );
+        // Limit to 10 entries
+        setBatchHistory(uniqueHistory.slice(0, 10));
+      }
+    } catch (error) {
+      console.error('Error loading batch history:', error);
+    }
+  };
+  
+  // Function to save batch history to localStorage
+  const saveBatchHistory = (batchNumber: string) => {
+    try {
+      // Validate batch number
+      if (!batchNumber || batchNumber.trim() === '') {
+        return;
+      }
+      
+      const newEntry: BatchHistory = {
+        batchNo: batchNumber.trim(),
+        timestamp: Date.now()
+      };
+      
+      // Load current history
+      const historyJson = localStorage.getItem(BATCH_HISTORY_KEY);
+      let history: BatchHistory[] = [];
+      
+      if (historyJson) {
+        history = JSON.parse(historyJson) as BatchHistory[];
+      }
+      
+      // Add new entry
+      history.push(newEntry);
+      
+      // Sort and remove duplicates
+      const sortedHistory = history.sort((a, b) => b.timestamp - a.timestamp);
+      const uniqueHistory = sortedHistory.filter((item, index, self) => 
+        index === self.findIndex(t => t.batchNo === item.batchNo)
+      );
+      
+      // Limit to 10 entries
+      const limitedHistory = uniqueHistory.slice(0, 10);
+      
+      // Save to localStorage
+      localStorage.setItem(BATCH_HISTORY_KEY, JSON.stringify(limitedHistory));
+      
+      // Update state
+      setBatchHistory(limitedHistory);
+    } catch (error) {
+      console.error('Error saving batch history:', error);
+    }
+  };
+  
+  // Function to select a batch from history
+  const handleSelectBatch = (batch: BatchHistory) => {
+    if (onBatchNoChange) {
+      onBatchNoChange(batch.batchNo);
+      setHistoryVisible(false);
+      
+      // Update history to make this the most recent entry
+      saveBatchHistory(batch.batchNo);
+      
+      // If onApplyBatchData exists, call it automatically
+      if (onApplyBatchData) {
+        onApplyBatchData();
+      }
+    }
+  };
+  
+  // Function to handle Enter key press in the search field
+  const handleBatchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && onApplyBatchData) {
+      onApplyBatchData();
+    }
+  };
+  
+  // Function to handle Alt+H shortcut to toggle history
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.altKey && e.key === 'h') {
+      setHistoryVisible(prev => !prev);
+    }
+  };
+  
+  // Register event listener for shortcuts
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+  
+  // Function to clear all history
+  const clearAllHistory = () => {
+    localStorage.removeItem(BATCH_HISTORY_KEY);
+    setBatchHistory([]);
+  };
+  
+  // Content of the batch history popover
+  const historyContent = (
+    <div style={{ width: '250px' }}>
+      {batchHistory.length === 0 ? (
+        <Empty description="No batch history available" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <List
+          size="small"
+          header={
+            <div style={{ fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Recent Batch History</span>
+              <Space>
+                <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                  Alt+H
+                </Typography.Text>
+                <Button 
+                  type="text" 
+                  size="small" 
+                  icon={<DeleteOutlined />} 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    clearAllHistory();
+                  }}
+                  title="Clear All History"
+                />
+              </Space>
+            </div>
+          }
+          bordered
+          dataSource={batchHistory}
+          renderItem={(item) => (
+            <List.Item 
+              style={{ 
+                cursor: 'pointer',
+                padding: '8px 12px',
+                transition: 'background-color 0.3s',
+                backgroundColor: item.batchNo === batchNo ? '#f0f5ff' : 'transparent',
+                display: 'flex',
+                justifyContent: 'space-between'
+              }}
+              onClick={() => handleSelectBatch(item)}
+            >
+              <Typography.Text strong style={{ fontSize: '14px' }}>
+                {item.batchNo}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                {new Date(item.timestamp).toLocaleDateString()}
+              </Typography.Text>
+            </List.Item>
+          )}
+          footer={
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <Button 
+                type="link" 
+                size="small" 
+                icon={<ReloadOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  loadBatchHistory();
+                }}
+              >
+                Refresh History
+              </Button>
+            </div>
+          }
+        />
+      )}
+    </div>
+  );
+
   return (
     <div style={{
       display: 'flex',
@@ -106,23 +313,40 @@ export const DesignerToolbar: React.FC<DesignerToolbarProps> = memo(({
         </div>
       </div>
       
-      {/* Center - Batch search */}
+      {/* Center - Batch search with history */}
       {onApplyBatchData && onBatchNoChange && (
         <div style={{ 
           display: 'flex', 
           alignItems: 'center',
-          width: '220px'
+          width: '260px'
         }}>
           <Typography.Text style={{ color: '#fff', marginRight: '8px', whiteSpace: 'nowrap', fontWeight: 'bold' }}>
             Sync Batch
           </Typography.Text>
           <Space.Compact style={{ width: '100%' }}>
+            <Popover
+              content={historyContent}
+              title={null}
+              trigger="click"
+              open={historyVisible}
+              onOpenChange={setHistoryVisible}
+              placement="bottomLeft"
+            >
+              <Tooltip title="View recent batch history (Alt+H)">
+                <Button 
+                  icon={<HistoryOutlined />}
+                  disabled={batchHistory.length === 0}
+                />
+              </Tooltip>
+            </Popover>
             <Input
               placeholder="######"
               value={batchNo}
               onChange={(e) => onBatchNoChange(e.target.value)}
               style={{ flex: 1, width: '100px' }}
               maxLength={6}
+              onKeyDown={handleBatchKeyDown}
+              status={batchError ? 'error' : undefined}
             />
             <Button
               type="primary"

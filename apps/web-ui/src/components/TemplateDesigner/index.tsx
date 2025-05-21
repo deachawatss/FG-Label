@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Layout, message, Modal, Input, Collapse } from 'antd';
 import { useRouter } from 'next/router';
 import { v4 as uuidv4 } from 'uuid';
@@ -9,6 +9,7 @@ import { DesignerToolbar } from './DesignerToolbar';
 import { ElementRenderer } from './ElementRenderer';
 import { TemplateSettingsModal } from './TemplateSettingsModal';
 import { PropertyPanel } from './PropertyPanel';
+import BatchDataSelectionModal from './BatchDataSelectionModal';
 
 // Import custom hooks
 import { useQrAndBarcodeUtils } from '../../hooks/designer/useQrAndBarcodeUtils';
@@ -21,7 +22,8 @@ import { useCanvasRenderer } from '../../hooks/designer/useCanvasRenderer';
 import { ElementType, TemplateInfo, CanvasSize, GroupElement } from '../../models/TemplateDesignerTypes';
 import { FEATURES, KEYBOARD_SHORTCUTS } from '../../utils/template/constants';
 import { getMessages, getMessage, setLocale } from '../../utils/template/locales';
-import { getFileInput, loadImageFile, downloadJsonTemplate } from '../../utils/template/fileUtils';
+import { getFileInput, loadImageFile, downloadJsonTemplate, cleanupFileResources } from '../../utils/template/fileUtils';
+import { getApiBaseUrl } from '../../utils/template/helpers';
 
 // Check if running on client side
 const isClient = typeof window !== 'undefined';
@@ -61,6 +63,28 @@ const LANGUAGE_COEFFICIENTS = {
   japanese: { width: 1.0, height: 1.2 },
   chinese: { width: 1.0, height: 1.2 },
   korean: { width: 1.0, height: 1.2 }
+};
+
+// Custom utility function to restrict element within canvas boundaries
+const keepElementInCanvas = (element: ElementType, canvas: CanvasSize): ElementType => {
+  // Create a new element with the same properties
+  const result = {
+    ...element,
+    // Enforce minimum positions (don't move out of left/top edges)
+    x: Math.max(0, element.x),
+    y: Math.max(0, element.y)
+  };
+  
+  // Enforce maximum positions (don't move out of right/bottom edges)
+  if (result.width && canvas.width) {
+    result.x = Math.min(result.x, canvas.width - result.width);
+  }
+  
+  if (result.height && canvas.height) {
+    result.y = Math.min(result.y, canvas.height - result.height);
+  }
+  
+  return result;
 };
 
 // Import client-only modules
@@ -116,12 +140,15 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
   
   // State variables
   const [batchNo, setBatchNo] = useState<string>('');
+  const [batchError, setBatchError] = useState<string | null>(null);
   const [templateInfoModal, setTemplateInfoModal] = useState<boolean>(false);
   const [importJson, setImportJson] = useState<string>('');
   const [importModal, setImportModal] = useState<boolean>(false);
   const [isTemplateLoading, setIsTemplateLoading] = useState<boolean>(false);
   const [templateLoaded, setTemplateLoaded] = useState<boolean>(false);
   const [batchInfo, setBatchInfo] = useState<any>(null);
+  const [batchDataSelectionModalVisible, setBatchDataSelectionModalVisible] = useState<boolean>(false);
+  const [selectedBatchRow, setSelectedBatchRow] = useState<any>(null);
   const [templateInfo, setTemplateInfo] = useState<TemplateInfo>({
     name: '',
     description: '',
@@ -137,6 +164,9 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
   const initialRenderRef = useRef<boolean>(true);
   const batchAppliedRef = useRef<{[key: string]: boolean}>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  
+  // Ref เพื่อเก็บสถานะว่าได้แสดง warning เกี่ยวกับการ constrain element แล้วหรือไม่
+  const hasShowedConstrainWarningRef = useRef<boolean>(false);
 
   // Router for navigation and URL parameters
   const router = useRouter();
@@ -222,6 +252,12 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
   const [editingTextPosition, setEditingTextPosition] = useState<{x: number, y: number, width: number, height: number} | null>(null);
   const [editingTextValue, setEditingTextValue] = useState<string>('');
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  
+  // Ref เพื่อเก็บ ID ของ text element ที่กำลังถูกแก้ไข
+  const editingTextIdRef = useRef<string | null>(null);
+  
+  // Ref สำหรับเก็บ handler ของ keyboard event
+  const keyboardHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
 
   // Side Effects
   
@@ -229,6 +265,17 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
   useEffect(() => {
     // Check if ready to load
     if (!router.isReady) return;
+    
+    // ตรวจสอบว่ามี id ส่งมาจากหน้า TemplateManagement หรือไม่
+    const urlTemplateId = router.query.id as string;
+    
+    // ถ้ามี id ใหม่จาก URL และไม่ตรงกับ templateId ที่มีอยู่ ให้กำหนดค่าใหม่
+    if (urlTemplateId && urlTemplateId !== templateId) {
+      setTemplateId(urlTemplateId);
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`Setting templateId from URL: ${urlTemplateId}`);
+      }
+    }
     
     // Skip loading if already loaded via templateLoadedRef
     if (templateLoadedRef.current) {
@@ -269,6 +316,38 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           }
           clearCache();
           initialRenderRef.current = false;
+        }
+
+        // ตรวจสอบว่าต้องโหลดเทมเพลตจาก API ตาม ID หรือไม่
+        const idFromUrl = router.query.id as string;
+        if (idFromUrl) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`Loading template by ID from URL: ${idFromUrl}`);
+          }
+          
+          try {
+            // โหลดข้อมูลเทมเพลตจาก API
+            const templateData = await loadTemplate(idFromUrl);
+            if (templateData) {
+              const { templateInfo: loadedTemplateInfo, elements: loadedElements, canvasSize: loadedCanvasSize } = templateData;
+              
+              // บันทึกข้อมูลลงในสถานะ
+              setTemplateInfo(loadedTemplateInfo);
+              replaceAllElements(loadedElements);
+              resizeCanvas(loadedCanvasSize);
+              
+              // อัปเดต QR codes และ barcodes
+              updateAllQrCodes(loadedElements.filter(el => el.type === 'qr'));
+              updateAllBarcodes(loadedElements.filter(el => el.type === 'barcode'));
+              
+              setTemplateLoaded(true);
+              templateLoadedRef.current = true;
+              return;
+            }
+          } catch (err) {
+            console.error('Error loading template by ID:', err);
+            message.error('Failed to load template. Creating a new one instead.');
+          }
         }
 
         // Check if initialTemplate is provided
@@ -401,7 +480,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     };
 
     loadInitialTemplate();
-  }, [initialTemplate, initialTemplateFromLocalStorage, router.query, router.isReady, clearCache, resizeCanvas, replaceAllElements, updateAllQrCodes, updateAllBarcodes]);
+  }, [initialTemplate, initialTemplateFromLocalStorage, router.query, router.isReady, clearCache, resizeCanvas, replaceAllElements, updateAllQrCodes, updateAllBarcodes, templateId, setTemplateId, loadTemplate]);
   
   // Update QR codes and Barcodes when elements change - adjust useEffect logic
   useEffect(() => {
@@ -484,13 +563,24 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     }
   }, [undo, redo, deleteElement, duplicateElement, selectedId, selectedIds, selectElement, createGroup, ungroup, elements]);
   
+  // อัปเดต ref เมื่อ handleKeyDown เปลี่ยน
+  useEffect(() => {
+    keyboardHandlerRef.current = handleKeyDown;
+  }, [handleKeyDown]);
+  
   // Set keyboard shortcuts for undo, redo, delete, duplicate, group, ungroup
   useEffect(() => {
     if (!isClient) return;
     
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
+    // ใช้ event handler ที่เรียก ref.current
+    const eventHandler = (e: KeyboardEvent) => keyboardHandlerRef.current(e);
+    
+    // ลงทะเบียนเพียงครั้งเดียว
+    window.addEventListener('keydown', eventHandler);
+    
+    // ทำความสะอาดเมื่อ unmount
+    return () => window.removeEventListener('keydown', eventHandler);
+  }, []); // ไม่มี dependency เพื่อให้ effect ทำงานเพียงครั้งเดียว
 
   // Event handlers
   
@@ -615,28 +705,6 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     }
   }, [router.isReady, router.query, templateLoaded, fetchAndApplyBatch, initialTemplateFromLocalStorage]);
   
-  // Custom utility function to restrict element within canvas boundaries
-  const keepElementInCanvas = (element: ElementType, canvas: CanvasSize): ElementType => {
-    // Create a new element with the same properties
-    const result = {
-      ...element,
-      // Enforce minimum positions (don't move out of left/top edges)
-      x: Math.max(0, element.x),
-      y: Math.max(0, element.y)
-    };
-    
-    // Enforce maximum positions (don't move out of right/bottom edges)
-    if (result.width && canvas.width) {
-      result.x = Math.min(result.x, canvas.width - result.width);
-    }
-    
-    if (result.height && canvas.height) {
-      result.y = Math.min(result.y, canvas.height - result.height);
-    }
-    
-    return result;
-  };
-  
   /**
    * Add new element
    */
@@ -731,7 +799,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           y: centerY,
           width: qrSize,
           height: qrSize,
-          value: 'https://example.com',
+          value: 'https://nwfap.com',
           fill: '#000000',
           draggable: true,
           visible: true
@@ -795,18 +863,64 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
 
         const file = target.files[0];
         
+        // ตรวจสอบขนาดไฟล์ (จำกัดไว้ที่ 5MB)
+        const maxFileSize = 5 * 1024 * 1024; // 5MB
+        if (file.size > maxFileSize) {
+          message.error('Image file too large (max 5MB)');
+          return;
+        }
+        
+        // ตรวจสอบประเภทไฟล์ว่าเป็นรูปภาพจริงๆ
+        if (!file.type.startsWith('image/')) {
+          message.error('Invalid image format');
+          return;
+        }
+        
+        // ตรวจสอบว่ามี element ที่เลือกอยู่หรือไม่
+        const isUpdatingExistingImage = selectedId && elements.find(el => el.id === selectedId && el.type === 'image');
+        
         // Show loading
-        message.loading(msgs.modals.imageUpload.uploading, 0);
+        message.loading('Uploading image...', 0);
         
         try {
-          // Use utility function to load and process image
-          const { width, height, url } = await loadImageFile(
-            file,
-            Math.min(canvasSize.width - 40, 300),
-            Math.min(canvasSize.height - 40, 300)
-          );
+          // เปลี่ยนจากการใช้ URL.createObjectURL เป็น FileReader.readAsDataURL
+          const reader = new FileReader();
           
-          // Create element centered on canvas
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string; // ได้ data URL แบบ base64 แล้ว
+            
+            // คำนวณขนาดรูปภาพจาก data URL
+            const img = new Image();
+            img.onload = () => {
+              // ปรับขนาดรูปภาพตามข้อจำกัดของ canvas
+              let width = img.width;
+              let height = img.height;
+              
+              const maxWidth = Math.min(canvasSize.width - 40, 300);
+              const maxHeight = Math.min(canvasSize.height - 40, 300);
+              
+              if (width > maxWidth) {
+                const ratio = maxWidth / width;
+                width = maxWidth;
+                height = Math.round(height * ratio);
+              }
+              
+              if (height > maxHeight) {
+                const ratio = maxHeight / height;
+                height = maxHeight;
+                width = Math.round(width * ratio);
+              }
+              
+              // ถ้ากำลังอัปเดต element ที่มีอยู่แล้ว
+              if (isUpdatingExistingImage) {
+                // อัปเดต src ของ element ที่มีอยู่แล้ว
+                updateElementProperty(selectedId, 'src', dataUrl);
+                message.destroy();
+                message.success('Image updated successfully');
+                return;
+              }
+              
+              // สร้าง element ใหม่
           const centerX = canvasSize.width / 2 - width / 2;
           const centerY = canvasSize.height / 2 - height / 2;
           
@@ -817,7 +931,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
             y: centerY,
             width,
             height,
-            src: url,
+                src: dataUrl, // ใช้ data URL โดยตรง
             draggable: true,
             visible: true
           };
@@ -828,17 +942,38 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           
           // Close loading and show success
           message.destroy();
-          message.success(msgs.modals.imageUpload.success);
+              message.success('Image uploaded successfully');
+            };
+            
+            img.onerror = () => {
+              // หากไม่สามารถโหลดรูปภาพได้
+              message.destroy();
+              message.error('Error processing image');
+            };
+            
+            // เริ่มโหลดรูปภาพจาก data URL
+            img.src = dataUrl;
+          };
+          
+          reader.onerror = () => {
+            message.destroy();
+            message.error('Error reading the image file');
+            console.error('FileReader error:', reader.error);
+          };
+          
+          // อ่านไฟล์เป็น Data URL (base64)
+          reader.readAsDataURL(file);
+          
         } catch (error) {
           message.destroy();
-          message.error(msgs.modals.imageUpload.error);
+          message.error('Error uploading image');
           if (process.env.NODE_ENV === 'development') {
-            console.error('Error loading image:', error);
+            console.error('Error uploading image:', error);
           }
         }
       } catch (error) {
         message.destroy();
-        message.error(msgs.errors.imageUpload);
+        message.error('Error in image upload process');
         if (process.env.NODE_ENV === 'development') {
           console.error('Error in image upload process:', error);
         }
@@ -847,8 +982,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     
     // Trigger file selection
     fileInput.click();
-  // มีเฉพาะ dependencies ที่จำเป็น ไม่รวม msgs.modals.imageUpload (เป็น object)
-  }, [canvasSize, addElement, selectElement]);
+  }, [canvasSize, addElement, selectElement, selectedId, elements, updateElementProperty]);
   
   /**
    * Rotate selected element
@@ -867,9 +1001,15 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
    * Save template settings
    */
   const handleSaveTemplateSettings = useCallback((newTemplateInfo: TemplateInfo, newCanvasSize: CanvasSize) => {
+    // บันทึกค่าที่เปลี่ยนแปลงลงในสถานะ (state)
     setTemplateInfo(newTemplateInfo);
     resizeCanvas(newCanvasSize);
+    
+    // ปิด modal
     setTemplateInfoModal(false);
+    
+    // แสดงข้อความยืนยันการบันทึกการตั้งค่า
+    message.success('Template settings updated');
   }, [resizeCanvas]);
   
   /**
@@ -891,35 +1031,64 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         try {
           // นำเข้า jspdf เมื่อต้องการใช้งาน
           const { jsPDF } = await import('jspdf');
-
+          
           // ตั้งค่าคุณภาพของรูปภาพ
-          const pixelRatio = 2;  // คุณภาพสูงกว่าหน้าจอ 2 เท่า
+          const pixelRatio = 3;  // คุณภาพสูงกว่าหน้าจอ 3 เท่า - เพิ่มเป็น 3 เท่า
 
-          // แปลง stage เป็น Data URL
+          // บันทึกค่า background color เดิมของ stage
+          const originalBackground = stageRef.current.container().style.background;
+          
+          // ซ่อนเส้นตารางโดยการกำหนดพื้นหลังเป็นสีขาวก่อนการส่งออก
+          stageRef.current.container().style.background = '#FFFFFF';
+          
+          // ซ่อน grid lines ชั่วคราว (หากมี)
+          const gridLinesVisible = document.querySelector('.konvajs-content');
+          const gridLineDisplayStyle = gridLinesVisible ? getComputedStyle(gridLinesVisible).display : '';
+          if (gridLinesVisible) {
+            (gridLinesVisible as HTMLElement).style.background = '#FFFFFF';
+          }
+
+          // แปลง stage เป็น Data URL แบบ PNG เพื่อรักษาความโปร่งใส
           const dataURL = stageRef.current.toDataURL({
             pixelRatio,
-            mimeType: 'image/jpeg',
+            mimeType: 'image/png',
             quality: 1,
             width: canvasSize.width,
-            height: canvasSize.height
+            height: canvasSize.height,
+            backgroundColor: '#FFFFFF' // กำหนดสีพื้นหลังเป็นสีขาว
           });
+
+          // คืนค่า background color เดิม
+          stageRef.current.container().style.background = originalBackground;
+          
+          // คืนค่า grid lines display (หากมีการเปลี่ยน)
+          if (gridLinesVisible && gridLineDisplayStyle) {
+            (gridLinesVisible as HTMLElement).style.background = '';
+          }
 
           // กำหนดชื่อไฟล์
           const filename = `${templateInfo.name || 'template'}-${batchNo || new Date().toISOString().slice(0, 10)}`;
 
-          // สร้าง PDF ด้วย jsPDF
+          // สร้าง PDF โดยใช้ขนาดตาม paperSize ที่ผู้ใช้กำหนด 
+          // กำหนดหน่วยเป็น px (pixels) จะทำให้ขนาดตรงกับที่แสดงในหน้า Template designer
           const orientation = canvasSize.width > canvasSize.height ? 'landscape' : 'portrait';
+          
+          // กำหนดขนาด margin ขอบกระดาษ (px)
+          const margin = 0; // ไม่มี margin
+          
+          // สร้าง PDF โดยกำหนดหน่วยเป็น px และขนาดตรงกับ canvas
           const pdf = new jsPDF({
             orientation,
             unit: 'px',
             format: [canvasSize.width, canvasSize.height],
-            hotfixes: ['px_scaling']
+            hotfixes: ['px_scaling'],
+            compress: true
           });
-
-          // เพิ่มรูปภาพลงใน PDF
+          
+          // เพิ่มรูปภาพลงใน PDF ขนาดเท่ากับ canvas
           pdf.addImage(
             dataURL,
-            'JPEG',
+            'PNG',
             0,
             0,
             canvasSize.width,
@@ -964,6 +1133,19 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         try {
           // ตั้งค่าคุณภาพของรูปภาพ
           const pixelRatio = 3;  // คุณภาพสูงกว่าหน้าจอ 3 เท่า
+          
+          // บันทึกค่า background color เดิมของ stage
+          const originalBackground = stageRef.current.container().style.background;
+          
+          // ซ่อนเส้นตารางโดยการกำหนดพื้นหลังเป็นสีขาวก่อนการส่งออก
+          stageRef.current.container().style.background = '#FFFFFF';
+          
+          // ซ่อน grid lines ชั่วคราว (หากมี)
+          const gridLinesVisible = document.querySelector('.konvajs-content');
+          const gridLineDisplayStyle = gridLinesVisible ? getComputedStyle(gridLinesVisible).display : '';
+          if (gridLinesVisible) {
+            (gridLinesVisible as HTMLElement).style.background = '#FFFFFF';
+          }
 
           // แปลง stage เป็น Data URL
           const dataURL = stageRef.current.toDataURL({
@@ -971,8 +1153,17 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
             mimeType: 'image/png',
             quality: 1,
             width: canvasSize.width,
-            height: canvasSize.height
+            height: canvasSize.height,
+            backgroundColor: '#FFFFFF' // กำหนดสีพื้นหลังเป็นสีขาว
           });
+          
+          // คืนค่า background color เดิม
+          stageRef.current.container().style.background = originalBackground;
+          
+          // คืนค่า grid lines display (หากมีการเปลี่ยน)
+          if (gridLinesVisible && gridLineDisplayStyle) {
+            (gridLinesVisible as HTMLElement).style.background = '';
+          }
 
           // สร้างลิงก์สำหรับดาวน์โหลด
           const link = document.createElement('a');
@@ -1008,11 +1199,29 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
    * Save template
    */
   const handleSaveTemplate = useCallback(async () => {
+    // ตรวจสอบชื่อเทมเพลต เนื่องจากเป็นข้อมูลที่จำเป็น
+    if (!templateInfo.name || templateInfo.name.trim() === '') {
+      message.warning('Template name is required');
+      setTemplateInfoModal(true);
+      return;
+    }
+    
+    try {
     const result = await saveTemplate(templateInfo, elements, canvasSize, batchNo);
     if (result) {
-      setTemplateInfoModal(false);
+        message.success(msgs.success.saveTemplate || 'Template saved successfully');
+        
+        // รอสักครู่เพื่อให้ UI แสดงข้อความสำเร็จก่อนเปลี่ยนหน้า
+        setTimeout(() => {
+          // นำทางไปยังหน้า Template Management ที่ถูกต้อง
+          router.push('/templates/management');
+        }, 1000);
+      }
+    } catch (error: any) {
+      console.error('Error saving template:', error);
+      message.error(`${msgs.errors.saveTemplate || 'Failed to save template'}: ${error.message}`);
     }
-  }, [saveTemplate, templateInfo, elements, canvasSize, batchNo]);
+  }, [saveTemplate, templateInfo, elements, canvasSize, batchNo, router, msgs]);
   
   /**
    * Export template as JSON
@@ -1100,16 +1309,103 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     }
   }, [importJson, importTemplateFromJson, replaceAllElements, resizeCanvas, updateAllQrCodes, updateAllBarcodes, clearCache, msgs]);
 
+  // ฟังก์ชันสำหรับจัดการเมื่อมีการเปลี่ยนแปลงค่า batchNo
+  const handleBatchChange = useCallback((newBatchNo: string) => {
+    setBatchNo(newBatchNo);
+    
+    // clear existing error as soon as we get something non-blank
+    if (newBatchNo.trim()) {
+      setBatchError(null);
+    }
+  }, []);
+
   // Update event handler for "Add Batch Data" button
   const handleUseBatchData = useCallback(() => {
     if (!batchNo) {
-      message.error(msgs.errors.invalidBatchNumber);
+      setBatchError(msgs.errors.invalidBatchNumber);
       return;
     }
     
-    // Call batch data fetching function
-    fetchAndApplyBatch(batchNo);
-  }, [batchNo, fetchAndApplyBatch, msgs]);
+    // เปิด Modal แสดงข้อมูล batch แทนที่จะเรียกฟังก์ชัน fetchAndApplyBatch โดยตรง
+    setBatchDataSelectionModalVisible(true);
+  }, [batchNo, msgs.errors.invalidBatchNumber, setBatchError]);
+  
+  // รับข้อมูล elements จาก BatchDataSelectionModal
+  const handleBatchDataSelection = useCallback((newElements: ElementType[], selectedRow?: any) => {
+    // ปิด Modal
+    setBatchDataSelectionModalVisible(false);
+    
+    // บันทึกข้อมูลแถวที่เลือกหากมีการส่งมา
+    if (selectedRow) {
+      setSelectedBatchRow(selectedRow);
+    }
+    
+    if (newElements.length === 0) {
+      message.info('ไม่มีข้อมูลที่เลือก');
+      return;
+    }
+    
+    // เพิ่ม elements ใหม่เข้าไปใน canvas
+    // หาค่า layer มากที่สุดในอาร์เรย์ปัจจุบัน
+    const maxLayer = elements.length > 0
+      ? Math.max(...elements.map(el => el.layer || 0))
+      : 0;
+    
+    // กำหนดค่า layer ให้กับองค์ประกอบที่จะเพิ่ม
+    const elementsWithLayers = newElements.map((el, index) => ({
+      ...el,
+      layer: maxLayer + ((index + 1) * 10) // ให้องค์ประกอบใหม่อยู่บนสุด
+    }));
+    
+    // สร้างลิสต์ใหม่ด้วยองค์ประกอบทั้งหมด - เพิ่มองค์ประกอบใหม่ไว้ที่ต้นอาร์เรย์
+    const allElements = [...elementsWithLayers, ...elements];
+    
+    // Call replaceAllElements with all elements
+    replaceAllElements(allElements);
+    
+    // อัพเดต QR codes และ barcodes ถ้ามี
+    const newQrElements = elementsWithLayers.filter(el => el.type === 'qr');
+    const newBarcodeElements = elementsWithLayers.filter(el => el.type === 'barcode');
+    
+    if (newQrElements.length > 0) {
+      updateAllQrCodes(newQrElements);
+    }
+    
+    if (newBarcodeElements.length > 0) {
+      updateAllBarcodes(newBarcodeElements);
+    }
+    
+    // ตรวจสอบและอัพเดต CustKey และ ItemKey จากข้อมูล batch ลงใน templateInfo
+    const batchRowToUse = selectedRow || selectedBatchRow;
+    if (batchRowToUse) {
+      // สร้าง templateInfo ใหม่ โดยเพิ่ม customerKey และ productKey ถ้ามีค่าใน batch data
+      const newTemplateInfo = { ...templateInfo };
+      
+      // ปรับปรุง customerKey ถ้ามีค่า custKey ในข้อมูล batch
+      if (batchRowToUse.custKey) {
+        newTemplateInfo.customerKey = batchRowToUse.custKey;
+        console.log(`ปรับปรุง Customer Code: ${batchRowToUse.custKey}`);
+      }
+      
+      // ปรับปรุง productKey ถ้ามีค่า itemKey ในข้อมูล batch
+      if (batchRowToUse.itemKey) {
+        newTemplateInfo.productKey = batchRowToUse.itemKey;
+        console.log(`ปรับปรุง Product Code: ${batchRowToUse.itemKey}`);
+      }
+      
+      // ปรับปรุงค่า templateInfo เฉพาะเมื่อมีการเปลี่ยนแปลง
+      if (newTemplateInfo.customerKey !== templateInfo.customerKey || 
+          newTemplateInfo.productKey !== templateInfo.productKey) {
+        setTemplateInfo(newTemplateInfo);
+        message.info('อัพเดต Customer Code และ Product Code จากข้อมูล batch แล้ว');
+      }
+    }
+    
+    message.success(`สร้าง ${newElements.length} elements จากข้อมูล batch สำเร็จ`);
+    
+    // ทำเครื่องหมายว่าได้ sync batch นี้แล้ว
+    batchAppliedRef.current[batchNo] = true;
+  }, [elements, replaceAllElements, updateAllQrCodes, updateAllBarcodes, batchNo, selectedBatchRow, templateInfo, setTemplateInfo]);
 
   /**
    * Effect: Cleanup resources when component unmounts
@@ -1124,17 +1420,8 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         }
       });
       
-      // Use cleanupFileResources to remove fileInput
-      try {
-        // Use utility function from fileUtils
-        import('../../utils/template/fileUtils').then(({ cleanupFileResources }) => {
+      // ใช้ cleanupFileResources ที่ import มาแล้ว
           cleanupFileResources();
-        });
-      } catch (error) {
-        if (process.env.NODE_ENV === 'development') {
-          console.error('Error cleaning up file input:', error);
-        }
-      }
       
       // Reset ref
       fileInputRef.current = null;
@@ -1223,7 +1510,9 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     updateElement(boundedElement);
   }, [elements, updateElement, canvasSize]);
 
-  // Handle text element edit
+  /**
+   * Handle element edit
+   */
   const handleElementEdit = useCallback((id: string, newProps: Partial<ElementType>) => {
     const elementToUpdate = elements.find(element => element.id === id);
     if (!elementToUpdate) return;
@@ -1233,17 +1522,67 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
       ...newProps
     } as ElementType;
     
-    // เพิ่มเติม: ถ้ามีการแก้ไข fontSize ของ text element ให้ตรวจสอบขนาดเพื่อไม่ให้ล้นขอบเขต
-    if (updatedElement.type === 'text' && 'fontSize' in newProps) {
-      // จำกัดขนาดฟอนต์ไม่ให้ใหญ่เกินไปเมื่อเทียบกับขนาดของกล่อง
-      const fontSize = newProps.fontSize as number;
-      const maxFontSize = Math.min(updatedElement.width / 2, updatedElement.height * 0.9);
+    // ถ้าเป็น text element และมีการเปลี่ยนแปลงที่ส่งผลต่อขนาด ให้คำนวณขนาดที่เหมาะสม
+    if (updatedElement.type === 'text' && 
+        ('text' in newProps || 'fontSize' in newProps || 'fontFamily' in newProps)) {
+      // ดึงค่าจาก updatedElement
+      const text = updatedElement.text || '';
+      const fontSize = (updatedElement as any).fontSize || DEFAULT_FONT_SIZE;
+      const fontFamily = (updatedElement as any).fontFamily || 'Arial';
       
-      if (fontSize > maxFontSize) {
-        // ถ้าฟอนต์ไซส์ใหญ่เกินไป ให้ปรับขนาดของกล่องให้เหมาะสม
-        updatedElement.width = Math.max(updatedElement.width, fontSize * 2.5);
-        updatedElement.height = Math.max(updatedElement.height, fontSize * 1.5);
+      // คำนวณความกว้างและความสูงที่เหมาะสมกับข้อความ
+      const lines = text.split('\n');
+      const lineCount = lines.length;
+      
+      // ค่าประมาณการความกว้างของตัวอักษร (เฉลี่ย) - ปรับตามประเภทฟอนต์
+      let avgCharWidth;
+      if (fontFamily.toLowerCase().includes('monospace') || fontFamily.toLowerCase().includes('courier')) {
+        // สำหรับ monospace font จะมีความกว้างเท่ากันทุกตัวอักษร
+        avgCharWidth = fontSize * 0.65;
+      } else if (fontFamily.toLowerCase().includes('serif')) {
+        // สำหรับ serif font (เช่น Times New Roman)
+        avgCharWidth = fontSize * 0.55;
+      } else {
+        // สำหรับ sans-serif font (เช่น Arial)
+        avgCharWidth = fontSize * 0.5;
       }
+      
+      // หาความยาวของบรรทัดที่ยาวที่สุด
+      let longestLineLength = 0;
+      for (const line of lines) {
+        // คำนวณความยาวของบรรทัดนี้โดยประมาณ
+        let lineLength = 0;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          // ตัวอักษรกว้าง (W, M) จะใช้พื้นที่มากกว่า
+          if ('WM@wmm'.includes(char)) {
+            lineLength += avgCharWidth * 1.3;
+          } else if (':.;,!iIl'.includes(char)) {
+            // ตัวอักษรแคบ (i, l) จะใช้พื้นที่น้อยกว่า
+            lineLength += avgCharWidth * 0.6;
+          } else {
+            lineLength += avgCharWidth;
+          }
+        }
+        longestLineLength = Math.max(longestLineLength, lineLength);
+      }
+      
+      // คำนวณขนาดที่เหมาะสม
+      // ลด padding ให้น้อยลง เพื่อให้กรอบพอดีกับข้อความมากขึ้น
+      const horizontalPadding = fontSize * 0.2; // ลดลงจาก 0.5
+      const verticalPadding = fontSize * 0.1; // ลดลงจาก 0.5
+      
+      // ปรับความกว้างและความสูงให้พอดีกับข้อความ
+      // ความกว้าง = ความยาวของข้อความที่ยาวที่สุด + padding ด้านข้าง
+      const calculatedWidth = Math.max(30, Math.ceil(longestLineLength + horizontalPadding * 2));
+      
+      // ความสูง = จำนวนบรรทัด * ความสูงของบรรทัด + padding ด้านบนล่าง
+      const lineHeight = fontSize * 1.15; // ความสูงต่อบรรทัด
+      const calculatedHeight = Math.max(fontSize, Math.ceil(lineCount * lineHeight + verticalPadding * 2));
+      
+      // อัพเดตขนาดอัตโนมัติ
+      updatedElement.width = calculatedWidth;
+      updatedElement.height = calculatedHeight;
     }
 
     // Apply boundary restrictions if position or size changed
@@ -1285,7 +1624,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     // สร้างฟังก์ชันสำหรับการจัดการเมื่อมีการ double click บน text element
     const handleDblClickOnText = () => {
       // ตรวจสอบว่ามี ID ที่กำลังแก้ไขหรือไม่
-      const editingId = (window as any).__editingTextId;
+      const editingId = editingTextIdRef.current;
       if (editingId) {
         console.log('Handling double-click on text element:', editingId);
         
@@ -1321,8 +1660,8 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                   container.style.pointerEvents = 'none';
                 }
                 
-                // ลบค่า editingTextId
-                (window as any).__editingTextId = null;
+                // ล้างค่า editingTextId
+                editingTextIdRef.current = null;
                 
                 // โฟกัสที่ textarea ทันที
                 requestAnimationFrame(() => {
@@ -1339,10 +1678,10 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     };
     
     // ติดตั้ง event listener สำหรับ double click
-    window.addEventListener('click', handleDblClickOnText);
+    window.addEventListener('dblclick', handleDblClickOnText);
     
     return () => {
-      window.removeEventListener('click', handleDblClickOnText);
+      window.removeEventListener('dblclick', handleDblClickOnText);
     };
   }, [elements, findNode, zoom, selectElement]);
   
@@ -1538,6 +1877,66 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     }
   };
 
+  // Memoize grid lines to avoid recreating them on every render
+  const gridLines = useMemo(() => {
+    // เปลี่ยนเงื่อนไขเป็น false เสมอเพื่อไม่แสดงเส้นตาราง
+    return null; // ไม่แสดงเส้นตารางโดยคืนค่า null เสมอ
+    
+    /* ปิดการทำงานของโค้ดเดิม
+    if (!FEATURES.SNAPPING.ENABLED) return null;
+    
+    const verticalLines = Array.from({ length: Math.ceil(canvasSize.width / FEATURES.SNAPPING.GRID_SIZE) }).map((_, i) => (
+      <Line
+        key={`vgrid-${i}`}
+        points={[i * FEATURES.SNAPPING.GRID_SIZE, 0, i * FEATURES.SNAPPING.GRID_SIZE, canvasSize.height]}
+        stroke={FEATURES.CANVAS.GRID_COLOR}
+        strokeWidth={i % 5 === 0 ? 0.5 : 0.2}
+      />
+    ));
+    
+    const horizontalLines = Array.from({ length: Math.ceil(canvasSize.height / FEATURES.SNAPPING.GRID_SIZE) }).map((_, i) => (
+      <Line
+        key={`hgrid-${i}`}
+        points={[0, i * FEATURES.SNAPPING.GRID_SIZE, canvasSize.width, i * FEATURES.SNAPPING.GRID_SIZE]}
+        stroke={FEATURES.CANVAS.GRID_COLOR}
+        strokeWidth={i % 5 === 0 ? 0.5 : 0.2}
+      />
+    ));
+    
+    return [...verticalLines, ...horizontalLines];
+    */
+  }, [canvasSize.width, canvasSize.height]);
+
+  // Memoize sorted elements to avoid sorting on every render
+  const sortedElements = useMemo(() => {
+    return elements
+      .slice()
+      .sort((a, b) => {
+        // เรียงลำดับตาม layer value - ค่าน้อยอยู่ด้านล่าง ค่ามากอยู่ด้านบน
+        const layerA = a.layer || 0;
+        const layerB = b.layer || 0;
+        return layerA - layerB; // น้อยไปมาก = วาดก่อน = อยู่ด้านล่าง
+      });
+  }, [elements]);
+
+  // แก้ไข style ของ .konvajs-content เพื่อลบตารางพื้นหลัง
+  useEffect(() => {
+    if (isClient) {
+      // กำหนด background ของ .konvajs-content เป็นสีขาว
+      const checkAndUpdateKonvaContainer = () => {
+        const konvaContainer = document.querySelector('.konvajs-content');
+        if (konvaContainer) {
+          (konvaContainer as HTMLElement).style.background = '#FFFFFF';
+        } else {
+          // หากยังไม่พบ container ให้ตรวจสอบอีกครั้งในไม่ช้า
+          setTimeout(checkAndUpdateKonvaContainer, 100);
+        }
+      };
+      
+      checkAndUpdateKonvaContainer();
+    }
+  }, [isClient, templateLoaded]);
+
   return (
     <div className="template-designer">
       <Layout style={{ minHeight: '100vh' }}>
@@ -1584,7 +1983,8 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
             isSaving={isSaving}
             zoom={zoom}
             batchNo={batchNo}
-            onBatchNoChange={setBatchNo}
+            onBatchNoChange={handleBatchChange}
+            batchError={batchError}
             onApplyBatchData={handleUseBatchData}
             isBatchLoading={batchLoading}
           />
@@ -1643,7 +2043,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                       height={canvasSize.height}
                       ref={stageRef}
                       style={{ 
-                        background: FEATURES.CANVAS.BACKGROUND_COLOR,
+                        background: '#FFFFFF', // กำหนดเป็นสีขาวล้วนแทนที่จะใช้ FEATURES.CANVAS.BACKGROUND_COLOR
                         boxShadow: '0 0 10px rgba(0,0,0,0.2)'
                       }}
                       onClick={(e: any) => {
@@ -1717,34 +2117,11 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                       }}
                     >
                       <Layer>
-                        {/* Show grid lines if needed */}
-                        {FEATURES.SNAPPING.ENABLED && Array.from({ length: Math.ceil(canvasSize.width / FEATURES.SNAPPING.GRID_SIZE) }).map((_, i) => (
-                          <Line
-                            key={`vgrid-${i}`}
-                            points={[i * FEATURES.SNAPPING.GRID_SIZE, 0, i * FEATURES.SNAPPING.GRID_SIZE, canvasSize.height]}
-                            stroke={FEATURES.CANVAS.GRID_COLOR}
-                            strokeWidth={i % 5 === 0 ? 0.5 : 0.2}
-                          />
-                        ))}
-                        {FEATURES.SNAPPING.ENABLED && Array.from({ length: Math.ceil(canvasSize.height / FEATURES.SNAPPING.GRID_SIZE) }).map((_, i) => (
-                          <Line
-                            key={`hgrid-${i}`}
-                            points={[0, i * FEATURES.SNAPPING.GRID_SIZE, canvasSize.width, i * FEATURES.SNAPPING.GRID_SIZE]}
-                            stroke={FEATURES.CANVAS.GRID_COLOR}
-                            strokeWidth={i % 5 === 0 ? 0.5 : 0.2}
-                          />
-                        ))}
+                        {/* Show grid lines if needed - turned off to have clean white background */}
+                        {/* {FEATURES.SNAPPING.ENABLED && gridLines} */}
                         
                         {/* Show elements */}
-                        {elements
-                          .slice()
-                          .sort((a, b) => {
-                            // เรียงลำดับตาม layer value - ค่าน้อยอยู่ด้านล่าง ค่ามากอยู่ด้านบน
-                            const layerA = a.layer || 0;
-                            const layerB = b.layer || 0;
-                            return layerA - layerB; // น้อยไปมาก = วาดก่อน = อยู่ด้านล่าง
-                          })
-                          .map((el) => (
+                        {sortedElements.map((el) => (
                           <Group
                             key={el.id}
                             id={el.id}
@@ -1760,6 +2137,15 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                               // Check if Ctrl is pressed
                               const isMultiSelect = e.evt.ctrlKey || e.evt.metaKey;
                               selectElement(el.id, isMultiSelect);
+                            }}
+                            onDblClick={(e: any) => {
+                              // ถ้าเป็น text element ให้เข้าสู่โหมดแก้ไข
+                              if (el.type === 'text') {
+                                e.cancelBubble = true;
+                                editingTextIdRef.current = el.id;
+                                // ไม่ต้องเรียก handleDblClickOnText โดยตรง
+                                // เพราะอีเวนต์ dblclick จะทำงานโดยอัตโนมัติ
+                              }
                             }}
                             visible={el.visible !== false}
                             opacity={el.visible === false ? 0.4 : 1}
@@ -1778,8 +2164,16 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                                   y: constrainedY
                                 });
                                 
-                                // Notify user about the boundary constraint
+                                // แสดง warning เมื่อสิ้นสุดการลากเท่านั้น และยังไม่เคยแสดงในรอบนี้
+                                if (!hasShowedConstrainWarningRef.current) {
                                 message.warning(msgs.canvas.elementConstrainedWarning || 'Element has been constrained to canvas boundaries');
+                                  hasShowedConstrainWarningRef.current = true;
+                                  
+                                  // รีเซ็ตสถานะหลังจากแสดงแล้ว 3 วินาที
+                                  setTimeout(() => {
+                                    hasShowedConstrainWarningRef.current = false;
+                                  }, 3000);
+                                }
                               }
                               
                               updateElementProperty(el.id, 'x', constrainedX);
@@ -1832,11 +2226,19 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                                   y: newY
                                 });
                                 
-                                // Notify user about the boundary constraint
+                                // แสดง warning เมื่อสิ้นสุดการลากเท่านั้น และยังไม่เคยแสดงในรอบนี้
+                                if (!hasShowedConstrainWarningRef.current) {
                                 message.warning(msgs.canvas.elementConstrainedWarning || 'Element has been constrained to canvas boundaries');
+                                  hasShowedConstrainWarningRef.current = true;
+                                  
+                                  // รีเซ็ตสถานะหลังจากแสดงแล้ว 3 วินาที
+                                  setTimeout(() => {
+                                    hasShowedConstrainWarningRef.current = false;
+                                  }, 3000);
+                                }
                               }
                               
-                              // สร้างอ็อบเจกต์พื้นฐานสำหรับอัพเดต
+                              // สร้างอ็อบเจกต์สำหรับอัพเดต - ไม่รวมการปรับฟอนต์ไซส์อัตโนมัติ
                               const updatedEl = {
                                 ...el,
                                 x: newX,
@@ -1846,202 +2248,10 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                                 rotation: node.rotation()
                               };
                               
-                              // หากเป็นอิลิเมนต์ข้อความ ให้คำนวณขนาดฟอนต์ที่เหมาะสม
-                              if (el.type === 'text') {
-                                const textElement = el as any; // TextElement
-                                const text = textElement.text || '';
-                                
-                                // ตรวจสอบภาษาของข้อความ
-                                const detectedLanguage = detectLanguage(text);
-                                const isRTL = ['arabic', 'hebrew'].includes(detectedLanguage);
-                                const isComplexScript = ['thai', 'japanese', 'chinese', 'korean'].includes(detectedLanguage);
-                                
-                                // กำหนดค่าแนวทางการคำนวณจากพารามิเตอร์ต่างๆ
-                                const CANVAS_PADDING = 20; // padding จากขอบ canvas
-                                const MAX_LINE_LENGTH = isRTL ? 30 : 40; // ความยาวสูงสุดต่อบรรทัด
-                                
-                                // นับจำนวนบรรทัดและความยาวสูงสุดของบรรทัด
-                                const lines = text.split('\n');
-                                const initialLineCount = lines.length || 1;
-                                const longestLineLength = Math.max(...lines.map(line => line.length));
-                                
-                                // ค่าสัมประสิทธิ์พื้นฐานสำหรับการคำนวณฟอนต์
-                                let widthMultiplier = 0.7;  // ค่าเริ่มต้นสำหรับภาษาละติน
-                                let heightMultiplier = 1.2;
-                                
-                                // ปรับค่าสัมประสิทธิ์ตามภาษา
-                                if (isRTL) {
-                                  // ลดค่าสัมประสิทธิ์ลงเพื่อให้ค่าฟอนต์ไซส์ไม่เล็กเกินไป
-                                  widthMultiplier = 0.5; // ค่าน้อยลงหมายถึงฟอนต์ใหญ่ขึ้น
-                                  heightMultiplier = 1.2;
-                                } else if (isComplexScript) {
-                                  widthMultiplier = 0.6;
-                                  heightMultiplier = 1.3;
-                                }
-                                
-                                // คำนวณความยาวต่อบรรทัดที่เหมาะสมสำหรับฟอนต์ไซส์นี้
-                                const fontSize = textElement.fontSize || DEFAULT_FONT_SIZE;
-                                const maxCharsPerLine = Math.floor(Math.max(1, updatedEl.width / (fontSize * widthMultiplier)));
-                                
-                                // คำนวณการแบ่งข้อความเป็นบรรทัดใหม่ถ้าข้อความยาวเกินไป
-                                let formattedText = text;
-                                let estimatedLineCount = initialLineCount;
-                                
-                                // เก็บข้อความดั้งเดิมไว้หากยังไม่เคยเก็บ
-                                if (!textElement.originalText) {
-                                  // หาข้อความต้นฉบับจากการรวมทุกบรรทัดที่อาจถูกตัดแบ่งโดยอัตโนมัติ
-                                  // แต่ยังคงรักษาการขึ้นบรรทัดใหม่ที่ผู้ใช้ตั้งใจใส่เอง
-                                  const originalLines = [];
-                                  let tempLine = '';
-                                  
-                                  for (let i = 0; i < lines.length; i++) {
-                                    const line = lines[i];
-                                    
-                                    // ถ้าบรรทัดนี้สั้นกว่า maxCharsPerLine และไม่ใช่บรรทัดสุดท้าย
-                                    // และบรรทัดถัดไปก็สั้นด้วย ให้สันนิษฐานว่าเป็นการกด Enter โดยผู้ใช้
-                                    if (line.length < maxCharsPerLine && i < lines.length - 1 && 
-                                        lines[i+1].length < maxCharsPerLine) {
-                                      if (tempLine) {
-                                        originalLines.push(tempLine);
-                                        tempLine = '';
-                                      }
-                                      originalLines.push(line);
-                                    } else {
-                                      // มิฉะนั้น สันนิษฐานว่าเป็นการตัดบรรทัดอัตโนมัติ
-                                      if (tempLine) {
-                                        tempLine += ' ' + line.trim();
-                                      } else {
-                                        tempLine = line;
-                                      }
-                                    }
-                                  }
-                                  
-                                  // เพิ่มบรรทัดสุดท้ายถ้ายังมีข้อความค้างอยู่
-                                  if (tempLine) {
-                                    originalLines.push(tempLine);
-                                  }
-                                  
-                                  (updatedEl as any).originalText = originalLines.join('\n');
-                                }
-                                
-                                // ใช้ข้อความต้นฉบับมาคำนวณการแบ่งบรรทัดใหม่ตามขนาดกล่องปัจจุบัน
-                                const originalText = (updatedEl as any).originalText || text;
-                                const originalLines = originalText.split('\n');
-                                const newLines = [];
-                                estimatedLineCount = 0;
-                                
-                                // วนลูปแต่ละบรรทัดในข้อความต้นฉบับ (ที่ผู้ใช้ใส่เอง)
-                                for (const line of originalLines) {
-                                  if (line.length <= maxCharsPerLine) {
-                                    // ถ้าบรรทัดนี้สั้นพอที่จะอยู่ในบรรทัดเดียว
-                                    newLines.push(line);
-                                    estimatedLineCount++;
-                                  } else {
-                                    // ถ้าบรรทัดนี้ยาวเกินไป ต้องแบ่งให้สั้นลง
-                                    let remainingText = line;
-                                    while (remainingText.length > 0) {
-                                      let breakPoint = Math.min(maxCharsPerLine, remainingText.length);
-                                      
-                                      // พยายามตัดที่ช่องว่างเพื่อไม่ให้ตัดกลางคำ
-                                      if (breakPoint < remainingText.length) {
-                                        let spacePos = remainingText.lastIndexOf(' ', breakPoint);
-                                        if (spacePos > breakPoint / 2) { // ถ้าพบช่องว่างที่ไม่ไกลเกินไป
-                                          breakPoint = spacePos + 1; // +1 เพื่อเอาช่องว่างไปด้วย
-                                        }
-                                      }
-                                      
-                                      newLines.push(remainingText.substring(0, breakPoint).trim());
-                                      remainingText = remainingText.substring(breakPoint).trim();
-                                      estimatedLineCount++;
-                                    }
-                                  }
-                                }
-                                
-                                // อัพเดตข้อความใหม่
-                                formattedText = newLines.join('\n');
-                                if ('text' in updatedEl) {
-                                  updatedEl.text = formattedText;
-                                }
-                                
-                                // เพิ่มขนาดกล่องสำหรับภาษา RTL โดยเฉพาะอาราบิก
-                                if (isRTL) {
-                                  // เพิ่มขนาดกล่องอีก 60% สำหรับภาษาอาราบิกและฮีบรู 
-                                  // แต่ต้องไม่เกินขนาด canvas
-                                  const boxWidth = Math.min(newWidth * 1.6, canvasSize.width - CANVAS_PADDING * 2);
-                                  updatedEl.width = boxWidth;
-                                }
-                                
-                                // ปรับตัวคูณตามความยาวของข้อความ
-                                if (longestLineLength > 20) {
-                                  widthMultiplier *= 1.1;
-                                } else if (longestLineLength > 10 && isRTL) {
-                                  widthMultiplier *= 0.9; // ลดลงเพื่อให้ฟอนต์ใหญ่ขึ้นสำหรับข้อความอาราบิกสั้นๆ
-                                }
-                                
-                                // ถ้ามีหลายบรรทัด เพิ่มเชิงเส้นสำหรับแต่ละบรรทัด
-                                if (estimatedLineCount > 1) {
-                                  heightMultiplier *= 1 + (estimatedLineCount - 1) * 0.2;
-                                }
-                                
-                                // คำนวณขนาดฟอนต์ตามความกว้างและความสูง
-                                const charWidth = fontSize * widthMultiplier;
-                                const lineHeight = fontSize * heightMultiplier;
-                                
-                                // ใช้ค่าที่น้อยกว่าเพื่อให้แน่ใจว่าข้อความจะอยู่ในกรอบ
-                                const estimatedFontSizeByWidth = updatedEl.width / (Math.max(1, maxCharsPerLine) * widthMultiplier);
-                                const estimatedFontSizeByHeight = updatedEl.height / (estimatedLineCount * heightMultiplier);
-                                
-                                let calculatedFontSize = Math.min(estimatedFontSizeByWidth, estimatedFontSizeByHeight);
-                                
-                                // สำหรับภาษาอาราบิก ให้มีค่าฟอนต์ไซส์ขั้นต่ำที่สูงกว่า
-                                const minFontSize = isRTL ? 14 : 12;
-                                
-                                // ปรับค่าฟอนต์ไซส์ให้อยู่ในช่วงที่เหมาะสม (12-72) และปัดเป็นจำนวนเต็ม
-                                let newFontSize = Math.round(Math.max(minFontSize, Math.min(72, calculatedFontSize)));
-                                
-                                // สำหรับภาษาอาราบิก อย่าให้ฟอนต์ไซส์เล็กเกินไป
-                                if (isRTL) {
-                                  // กำหนดค่าขั้นต่ำเป็นพิเศษสำหรับภาษาอาราบิก
-                                  newFontSize = Math.max(newFontSize, 14);
-                                }
-                                
-                                // เพิ่ม padding ในกล่องข้อความ
-                                const boxPadding = fontSize * 0.1; // ลดลงจาก 0.3 เป็น 0.1
-                                updatedEl.width += boxPadding; // ลดลงจาก boxPadding * 2 เป็น boxPadding เดียว
-                                // ไม่เพิ่ม padding สำหรับความสูง
-                                // updatedEl.height += boxPadding;
-                                
-                                // อัพเดตค่าฟอนต์ไปที่อิลิเมนต์ที่จะอัพเดต
-                                (updatedEl as any).fontSize = newFontSize;
-                                
-                                // สำหรับภาษา RTL ให้จัดตำแหน่งเป็น right โดยอัตโนมัติถ้ายังไม่ได้ตั้งค่า
-                                if (isRTL && (!textElement.align || textElement.align === 'left')) {
-                                  (updatedEl as any).align = 'right';
-                                }
-                                
-                                // ตรวจสอบและจำกัดขนาดไม่ให้เกินขอบ canvas
-                                const maxWidth = canvasSize.width - CANVAS_PADDING * 2;
-                                const maxHeight = canvasSize.height - CANVAS_PADDING * 2;
-                                
-                                if (updatedEl.width > maxWidth) {
-                                  updatedEl.width = maxWidth;
-                                }
-                                
-                                if (updatedEl.height > maxHeight) {
-                                  updatedEl.height = maxHeight;
-                                }
-                                
-                                // ตรวจสอบว่ากล่องยังอยู่ในขอบเขต canvas หรือไม่
-                                if (updatedEl.x + updatedEl.width > canvasSize.width - CANVAS_PADDING) {
-                                  updatedEl.x = Math.max(CANVAS_PADDING, canvasSize.width - CANVAS_PADDING - updatedEl.width);
-                                }
-                                
-                                if (updatedEl.y + updatedEl.height > canvasSize.height - CANVAS_PADDING) {
-                                  updatedEl.y = Math.max(CANVAS_PADDING, canvasSize.height - CANVAS_PADDING - updatedEl.height);
-                                }
-                              }
+                              // ลบโค้ดที่เกี่ยวกับการปรับฟอนต์ไซส์อัตโนมัติออก
+                              // เมื่อขยายกรอบข้อความ จะไม่ปรับฟอนต์ไซส์อีกต่อไป
                               
-                              // ตรวจสอบและจำกัดขนาดสุดท้ายไม่ให้เกิน canvas
+                              // จำกัดขนาดกรอบไม่ให้เกิน canvas
                               if (updatedEl.width > canvasSize.width) {
                                 updatedEl.width = canvasSize.width - 40; // เว้น padding ด้านละ 20px
                                 updatedEl.x = 20; // จัดให้อยู่ชิดขอบซ้ายพร้อม padding
@@ -2218,6 +2428,16 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           rows={10}
         />
       </Modal>
+      
+      {/* Modal เลือกข้อมูล Batch */}
+      <BatchDataSelectionModal
+        visible={batchDataSelectionModalVisible}
+        batchNo={batchNo}
+        onCancel={() => setBatchDataSelectionModalVisible(false)}
+        onConfirm={handleBatchDataSelection}
+        apiBaseUrl={getApiBaseUrl()}
+        onBatchChange={handleBatchChange}
+      />
     </div>
   );
 };

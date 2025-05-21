@@ -5,6 +5,9 @@
 // Singleton for file input element to prevent multiple instances
 let fileInputSingleton: HTMLInputElement | null = null;
 
+// เก็บรายการ Blob URL ที่สร้างไว้เพื่อล้างทิ้งเมื่อไม่ได้ใช้งาน
+const createdBlobUrls: string[] = [];
+
 /**
  * Get a singleton file input element to reuse across the application
  * @param accept File type MIME or extension to accept (e.g. 'image/*')
@@ -52,11 +55,19 @@ export const loadImageFile = async (
 ): Promise<{ width: number; height: number; url: string }> => {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
+    // เก็บ URL ที่สร้างไว้ในรายการเพื่อล้างทิ้งภายหลัง
+    createdBlobUrls.push(url);
+    
     const image = new Image();
     
     // Set timeout to prevent infinite loading
     const timeout = setTimeout(() => {
       URL.revokeObjectURL(url);
+      // ลบออกจากรายการ
+      const index = createdBlobUrls.indexOf(url);
+      if (index !== -1) {
+        createdBlobUrls.splice(index, 1);
+      }
       reject(new Error('Image loading timeout'));
     }, 10000); // 10 second timeout
     
@@ -85,6 +96,11 @@ export const loadImageFile = async (
     image.onerror = () => {
       clearTimeout(timeout);
       URL.revokeObjectURL(url);
+      // ลบออกจากรายการ
+      const index = createdBlobUrls.indexOf(url);
+      if (index !== -1) {
+        createdBlobUrls.splice(index, 1);
+      }
       reject(new Error('Error loading image'));
     };
     
@@ -93,12 +109,34 @@ export const loadImageFile = async (
 };
 
 /**
- * Clean up all URL objects and remove file input element
+ * Clean up any file resources created during the session
+ * to prevent memory leaks
  */
 export const cleanupFileResources = () => {
+  // Cleanup file input
   if (fileInputSingleton) {
-    document.body.removeChild(fileInputSingleton);
+    try {
+      if (fileInputSingleton.parentNode) {
+        fileInputSingleton.parentNode.removeChild(fileInputSingleton);
+      }
+    } catch (e) {
+      console.warn('Error cleaning up file input:', e);
+    }
     fileInputSingleton = null;
+  }
+  
+  // รีวอค (revoke) ทุก Blob URL ที่ได้สร้างไว้
+  if (createdBlobUrls.length > 0) {
+    createdBlobUrls.forEach(url => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        console.warn('Error revoking URL:', e);
+      }
+    });
+    
+    // ล้างรายการ URL ทั้งหมด
+    createdBlobUrls.length = 0;
   }
 };
 

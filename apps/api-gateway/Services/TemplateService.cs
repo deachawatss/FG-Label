@@ -109,11 +109,15 @@ namespace FgLabel.Api.Services
             return newTemplateId;
         }
 
-        private async Task UpdateTemplateMappingAsync(int templateId, string productKey, string customerKey)
+        private async Task UpdateTemplateMappingAsync(int templateId, string? productKey, string? customerKey)
         {
+            // บันทึก log ข้อมูลที่ส่งเข้ามา
+            _logger.LogInformation("UpdateTemplateMappingAsync: TemplateId={TemplateId}, ProductKey={ProductKey}, CustomerKey={CustomerKey}",
+                templateId, productKey ?? "null", customerKey ?? "null");
+            
             try
             {
-                _logger.LogInformation("เริ่มการอัพเดต template mapping ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}", productKey, customerKey);
+                _logger.LogInformation("เริ่มการอัพเดต template mapping ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}", productKey ?? "null", customerKey ?? "null");
                 
                 // ตรวจสอบว่า stored procedure มีอยู่หรือไม่
                 bool spExists = await CheckStoredProcedureExists("FgL.UpdateTemplateMappingWithStringKeys");
@@ -131,7 +135,7 @@ namespace FgLabel.Api.Services
                     });
                     
                     _logger.LogInformation("อัพเดต template mapping สำเร็จสำหรับ TemplateID={TemplateId}, ProductKey={ProductKey}, CustomerKey={CustomerKey}",
-                        templateId, productKey, customerKey);
+                        templateId, productKey ?? "null", customerKey ?? "null");
                 }
                 else
                 {
@@ -149,14 +153,15 @@ namespace FgLabel.Api.Services
                     
                     try
                     {
+                        string productKeyValue = productKey!; // ไม่ต้องตรวจสอบอีกเพราะเช็คแล้วด้านบน
                         await _sql.GetConnection().ExecuteAsync(prodSql, new
                         {
                             TemplateId = templateId,
-                            ProductKeyString = productKey
+                            ProductKeyString = productKeyValue
                         });
                         
                         _logger.LogInformation("สร้าง mapping สำหรับ ProductKey {ProductKey} และ Template {TemplateId} สำเร็จ",
-                            productKey, templateId);
+                            productKeyValue, templateId);
                     }
                     catch (Exception ex)
                     {
@@ -174,14 +179,15 @@ namespace FgLabel.Api.Services
                     
                     try
                     {
+                        string customerKeyValue = customerKey!; // ไม่ต้องตรวจสอบอีกเพราะเช็คแล้วด้านบน
                         await _sql.GetConnection().ExecuteAsync(custSql, new
                         {
                             TemplateId = templateId,
-                            CustomerKeyString = customerKey
+                            CustomerKeyString = customerKeyValue
                         });
                         
                         _logger.LogInformation("สร้าง mapping สำหรับ CustomerKey {CustomerKey} และ Template {TemplateId} สำเร็จ",
-                            customerKey, templateId);
+                            customerKeyValue, templateId);
                     }
                     catch (Exception ex)
                     {
@@ -200,15 +206,18 @@ namespace FgLabel.Api.Services
                     
                     try
                     {
+                        string productKeyValue = productKey!; // ไม่ต้องตรวจสอบอีกเพราะเช็คแล้วด้านบน
+                        string customerKeyValue = customerKey!; // ไม่ต้องตรวจสอบอีกเพราะเช็คแล้วด้านบน
+                        
                         await _sql.GetConnection().ExecuteAsync(prodCustSql, new
                         {
                             TemplateId = templateId,
-                            ProductKeyString = productKey,
-                            CustomerKeyString = customerKey
+                            ProductKeyString = productKeyValue,
+                            CustomerKeyString = customerKeyValue
                         });
                         
                         _logger.LogInformation("สร้าง mapping สำหรับ ProductKey {ProductKey}, CustomerKey {CustomerKey} และ Template {TemplateId} สำเร็จ",
-                            productKey, customerKey, templateId);
+                            productKeyValue, customerKeyValue, templateId);
                     }
                     catch (Exception ex)
                     {
@@ -259,36 +268,36 @@ namespace FgLabel.Api.Services
                 // ลองดึงข้อมูลจาก ItemKeyResolved ก่อน แล้วค่อยใช้ ItemKey เป็นตัวสำรอง
                 if (batchDict.TryGetValue("ItemKeyResolved", out var resolvedProdKey) && resolvedProdKey != null)
                 {
-                    productKey = resolvedProdKey.ToString();
+                    productKey = resolvedProdKey!.ToString();
                     _logger.LogInformation("ใช้ค่า ItemKeyResolved: {ItemKey}", productKey);
                 }
                 else if (batchDict.TryGetValue("ItemKey", out var prodKey) && prodKey != null)
                 {
-                    productKey = prodKey.ToString();
+                    productKey = prodKey!.ToString();
                     _logger.LogInformation("ใช้ค่า ItemKey: {ItemKey}", productKey);
                 }
                 
                 // ดึงชื่อสินค้า
                 if (batchDict.TryGetValue("Product", out var prodName) && prodName != null)
                 {
-                    productName = prodName.ToString();
+                    productName = prodName!.ToString();
                     _logger.LogInformation("ชื่อสินค้า: {ProductName}", productName);
                 }
                 else if (batchDict.TryGetValue("BME_Product", out var bmeProdName) && bmeProdName != null)
                 {
-                    productName = bmeProdName.ToString();
+                    productName = bmeProdName!.ToString();
                     _logger.LogInformation("ชื่อสินค้า (BME): {ProductName}", productName);
                 }
                 
                 // ลองดึงข้อมูลจาก CustKeyResolved ก่อน แล้วค่อยใช้ CustKey เป็นตัวสำรอง
                 if (batchDict.TryGetValue("CustKeyResolved", out var resolvedCustKey) && resolvedCustKey != null)
                 {
-                    customerKey = resolvedCustKey.ToString();
+                    customerKey = resolvedCustKey!.ToString();
                     _logger.LogInformation("ใช้ค่า CustKeyResolved: {CustKey}", customerKey);
                 }
                 else if (batchDict.TryGetValue("CustKey", out var custKey) && custKey != null)
                 {
-                    customerKey = custKey.ToString();
+                    customerKey = custKey!.ToString();
                     _logger.LogInformation("ใช้ค่า CustKey: {CustKey}", customerKey);
                 }
                 
@@ -347,7 +356,8 @@ namespace FgLabel.Api.Services
                 
                 if (batchDict.TryGetValue("ALLERGEN2", out var allergen2) && allergen2 != null)
                 {
-                    string allergen2Str = allergen2.ToString();
+                    // รับรองว่า allergen2 ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && allergen2 != null
+                    var allergen2Str = allergen2.ToString();
                     batchDto.ALLERGEN2 = allergen2Str;
                     
                     // แยกส่วนของ ALLERGEN2 ตามเครื่องหมาย :
@@ -366,7 +376,8 @@ namespace FgLabel.Api.Services
                 
                 if (batchDict.TryGetValue("ALLERGEN3", out var allergen3) && allergen3 != null)
                 {
-                    string allergen3Str = allergen3.ToString();
+                    // รับรองว่า allergen3 ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && allergen3 != null
+                    var allergen3Str = allergen3.ToString();
                     batchDto.ALLERGEN3 = allergen3Str;
                     
                     // แยกส่วนของ ALLERGEN3 ตามเครื่องหมาย :
@@ -390,6 +401,7 @@ namespace FgLabel.Api.Services
                 if (batchDict.TryGetValue("PACKUNIT1", out var packUnit)) batchDto.PACKUNIT1 = packUnit?.ToString();
                 if (batchDict.TryGetValue("NET_WEIGHT1", out var netWeight) && netWeight != null)
                 {
+                    // รับรองว่า netWeight ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && netWeight != null
                     if (decimal.TryParse(netWeight.ToString(), out var weight))
                         batchDto.NET_WEIGHT1 = weight;
                 }
@@ -425,7 +437,9 @@ namespace FgLabel.Api.Services
                 _logger.LogInformation("สร้าง template {TemplateId} สำหรับ batch {BatchNo} เรียบร้อย", templateId, request.BatchNo);
                 
                 // 5. สร้าง mapping แยกตามประเภทข้อมูล
-                await UpdateTemplateMappingAsync(templateId, productKey ?? string.Empty, customerKey ?? string.Empty);
+                string? nullableProductKey = productKey;
+                string? nullableCustomerKey = customerKey;
+                await UpdateTemplateMappingAsync(templateId, nullableProductKey, nullableCustomerKey);
                 
                 return templateId;
             }
@@ -436,12 +450,12 @@ namespace FgLabel.Api.Services
             }
         }
 
-        public async Task<int> AutoCreateTemplateAsync(string batchNo, string templateName, string templateContent, string productKey, string customerKey)
+        public async Task<int> AutoCreateTemplateAsync(string batchNo, string templateName, string templateContent, string? productKey, string? customerKey)
         {
             try
             {
                 _logger.LogInformation("กำลังสร้าง template อัตโนมัติสำหรับ batch {BatchNo} ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}",
-                    batchNo, productKey, customerKey);
+                    batchNo, productKey ?? "null", customerKey ?? "null");
                 
                 var sql = @"
                     INSERT INTO FgL.LabelTemplate (Name, Content, IsActive, CreatedAt, UpdatedAt)
@@ -457,7 +471,9 @@ namespace FgLabel.Api.Services
                 _logger.LogInformation("สร้าง template {TemplateId} สำเร็จ กำลังสร้าง mapping", templateId);
                 
                 // สร้าง mapping สำหรับ template นี้
-                await UpdateTemplateMappingAsync(templateId, productKey, customerKey);
+                string? nullableProductKey = productKey;
+                string? nullableCustomerKey = customerKey;
+                await UpdateTemplateMappingAsync(templateId, nullableProductKey, nullableCustomerKey);
                 
                 return templateId;
             }
@@ -986,11 +1002,11 @@ namespace FgLabel.Api.Services
                 
                 // เก็บค่า ProductKey และ CustomerKey เป็น string
                 // ให้ความสำคัญกับ ItemKeyResolved และ CustKeyResolved ก่อน
-                string productKeyStr = batch.ProductKey?.ToString() ?? batch.ItemKey?.ToString();
-                string customerKeyStr = batch.CustomerKey?.ToString() ?? batch.CustKey?.ToString();
+                string? productKeyStr = batch.ProductKey?.ToString() ?? batch.ItemKey?.ToString();
+                string? customerKeyStr = batch.CustomerKey?.ToString() ?? batch.CustKey?.ToString();
                 
                 _logger.LogInformation("ค้นหา template สำหรับ batch {BatchNo} ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}",
-                    batchNo, productKeyStr, customerKeyStr);
+                    batchNo, productKeyStr ?? "null", customerKeyStr ?? "null");
                 
                 // ตรวจสอบว่า stored procedure มีอยู่หรือไม่
                 bool spExists = await CheckStoredProcedureExists("FgL.GetTemplateByProductAndCustomerKeys");
@@ -1084,7 +1100,7 @@ namespace FgLabel.Api.Services
                 }
                 
                 _logger.LogInformation("ไม่พบ template mapping สำหรับ ProductKey={ProductKey}, CustomerKey={CustomerKey} จะสร้าง template ใหม่",
-                    productKeyStr, customerKeyStr);
+                    productKeyStr ?? "null", customerKeyStr ?? "null");
                     
                 // สร้าง template ใหม่อัตโนมัติ
                 var autoCreateRequest = new AutoCreateRequest
@@ -1167,16 +1183,16 @@ namespace FgLabel.Api.Services
                 if (templateId <= 0)
                 {
                     _logger.LogError("Failed to create template for batch {BatchNo}", batchNo);
-                    return null;
+                    return await Task.FromResult<TemplateDto>(null!);
                 }
                 
                 // ดึงข้อมูล template
-                return await GetTemplateById(templateId);
+                return await GetTemplateById(templateId) ?? new TemplateDto { Id = -1, Name = "Error Template" };
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in GetOrCreateByBatch for batch {BatchNo}: {Message}", batchNo, ex.Message);
-                return null;
+                return await Task.FromResult<TemplateDto>(null!);
             }
         }
         
@@ -1322,7 +1338,7 @@ namespace FgLabel.Api.Services
                 if (template == null)
                 {
                     _logger.LogWarning("Template {TemplateId} not found or not active", templateId);
-                    return null;
+                    return new TemplateDto { Id = -1, Name = $"Template-{templateId}-NotFound" };
                 }
                 
                 // ดึงข้อมูล components
@@ -1365,7 +1381,7 @@ namespace FgLabel.Api.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting template {TemplateId}: {Message}", templateId, ex.Message);
-                return null;
+                return new TemplateDto { Id = -1, Name = $"Error-{templateId}" };
             }
         }
     }

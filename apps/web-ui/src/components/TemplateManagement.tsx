@@ -35,7 +35,14 @@ export default function TemplateManagement() {
         throw new Error('Please login first');
       }
 
-      const res = await fetch('http://localhost:5051/api/templates', {
+      // Use the correct API endpoint with full URL
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5051';
+      // Remove '/api' from the URL if it's already included in apiBaseUrl
+      const apiUrl = apiBaseUrl.endsWith('/api') 
+        ? `${apiBaseUrl}/templates` 
+        : `${apiBaseUrl}/api/templates`;
+      
+      const res = await fetch(apiUrl, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -46,27 +53,45 @@ export default function TemplateManagement() {
       }
 
       const data = await res.json();
-      console.log('Templates data:', data);
+      console.log('Raw templates data:', data);
       
-      // Transform field names from API to match component expectations
-      const formattedTemplates = data.map((template: any) => ({
-        id: template.id || template.ID,
-        name: template.name || template.Name,
-        description: template.description || template.Description || '',
-        productKey: template.productKey || template.ProductKey || '',
-        customerKey: template.customerKey || template.CustomerKey || '',
-        version: template.version || template.Version || 1,
-        createdAt: template.createdAt || template.CreatedAt,
-        updatedAt: template.updatedAt || template.UpdatedAt,
-        active: template.active || template.Active,
-        paperSize: template.paperSize || template.PaperSize || '4x4',
-        orientation: template.orientation || template.Orientation || 'Portrait',
-        templateType: template.templateType || template.TemplateType || 'INNER',
-        engine: template.engine || template.Engine || 'html'
-      }));
-      
-      const validTemplates = formattedTemplates.filter((template: any) => typeof template.id === 'number');
-      setTemplates(validTemplates);
+      if (data && Array.isArray(data)) {
+        // Transform data to match our expected format
+        const formattedTemplates = data.map((template: any) => {
+          console.log('Processing template:', template);
+          
+          // Create a formatted template object ensuring we handle both camelCase and PascalCase fields
+          const formattedTemplate: Template = {
+            id: template.TemplateID || template.templateID || template.id || 0,
+            name: template.Name || template.name || 'Unnamed Template',
+            description: template.Description || template.description || '',
+            productKey: template.ProductKey || template.productKey || '',
+            customerKey: template.CustomerKey || template.customerKey || '',
+            createdAt: template.CreatedAt || template.createdAt || new Date().toISOString(),
+            updatedAt: template.UpdatedAt || template.updatedAt || new Date().toISOString(),
+            version: template.Version || template.version || 1,
+            active: template.Active !== undefined ? template.Active : (template.active !== undefined ? template.active : true),
+            paperSize: template.PaperSize || template.paperSize || '4x4',
+            orientation: template.Orientation || template.orientation || 'Portrait',
+            templateType: template.TemplateType || template.templateType || 'INNER',
+            engine: template.Engine || template.engine || 'html'
+          };
+          
+          console.log('Formatted template:', formattedTemplate);
+          return formattedTemplate;
+        });
+        
+        console.log('All formatted templates before filtering:', formattedTemplates);
+        
+        // Filter out invalid templates
+        const validTemplates = formattedTemplates.filter(template => template.id > 0);
+        console.log('Valid templates after filtering:', validTemplates);
+        
+        setTemplates(validTemplates);
+      } else {
+        console.error('Unexpected API response format:', data);
+        setTemplates([]);
+      }
     } catch (err: any) {
       console.error('Error fetching templates:', err);
       message.error(`Unable to fetch templates: ${err.message}`);
@@ -84,10 +109,18 @@ export default function TemplateManagement() {
       message.error('Invalid Template ID');
       return;
     }
-    router.push(`/template-designer/${id}`);
+    console.log(`Editing template ID: ${id}`);
+    router.push(`/templates/designer?id=${id}`);
   };
 
   const handleClone = (template: Template) => {
+    if (!template.id) {
+      message.error('Invalid Template ID');
+      return;
+    }
+    
+    console.log(`Cloning template ID: ${template.id}`);
+    
     // Create URL with all parameters to send to the designer page
     const params = new URLSearchParams({
       clone: template.id.toString(),
@@ -122,7 +155,14 @@ export default function TemplateManagement() {
           }
 
           console.log(`Deleting template ID: ${id}`);
-          const res = await fetch(`http://localhost:5051/api/templates/${id}`, {
+          // Use the correct API endpoint with full URL
+          const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5051';
+          // Remove '/api' from the URL if it's already included in apiBaseUrl
+          const apiUrl = apiBaseUrl.endsWith('/api') 
+            ? `${apiBaseUrl}/templates/${id}` 
+            : `${apiBaseUrl}/api/templates/${id}`;
+          
+          const res = await fetch(apiUrl, {
             method: 'DELETE',
             headers: {
               'Authorization': `Bearer ${token}`
@@ -197,11 +237,11 @@ export default function TemplateManagement() {
             <Text type="secondary" style={{ fontSize: '12px' }}>{record.description}</Text>
           )}
           <Space size={2} style={{ marginTop: 4 }}>
-            <Tag color="blue">{formatVersion(record.version)}</Tag>
-            <Tag color="purple">{record.engine}</Tag>
-            <Tag color="cyan">{getPaperSizeDisplayName(record.paperSize)}</Tag>
-            <Tag color="orange">{record.orientation}</Tag>
-            <Tag color="green">{record.templateType}</Tag>
+            <Tag color="blue">{formatVersion(record.version || 1)}</Tag>
+            <Tag color="purple">{record.engine || 'html'}</Tag>
+            <Tag color="cyan">{getPaperSizeDisplayName(record.paperSize || '4x4')}</Tag>
+            <Tag color="orange">{record.orientation || 'Portrait'}</Tag>
+            <Tag color="green">{record.templateType || 'INNER'}</Tag>
           </Space>
         </Space>
       ),
@@ -238,13 +278,6 @@ export default function TemplateManagement() {
               type="primary"
               icon={<EditOutlined />}
               onClick={() => handleEdit(record.id)}
-              disabled={!record.id}
-            />
-          </Tooltip>
-          <Tooltip title="Clone Template">
-            <Button
-              icon={<CopyOutlined />}
-              onClick={() => handleClone(record)}
               disabled={!record.id}
             />
           </Tooltip>
@@ -317,7 +350,7 @@ export default function TemplateManagement() {
               pageSizeOptions: ['10', '20', '50'],
             }}
             locale={{
-              emptyText: 'No template data',
+              emptyText: loading ? 'Loading...' : 'No template data',
             }}
           />
         </div>

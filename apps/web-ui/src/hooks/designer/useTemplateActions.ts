@@ -32,12 +32,58 @@ export const useTemplateActions = () => {
     try {
       setIsSaving(true);
       
-      // เตรียมข้อมูลที่จะบันทึก
-      // ให้แต่ละ element มี z-index ที่แตกต่างกัน
-      const elementsWithZIndex = elements.map((el, index) => ({
-        ...el,
-        layer: el.layer || index * 10 // ใช้ช่วงที่กว้างขึ้นเพื่อให้มีช่องว่างระหว่าง layer
-      }));
+      /* -----------------------------------------------------------
+       * 1. Normalise every image.src:
+       *    - if it is already a data:-URL keep it
+       *    - if it is a blob:-URL convert to data:-URL (base64)
+       * ---------------------------------------------------------- */
+      const normaliseSrc = async (src?: string): Promise<string | undefined> => {
+        if (!src || src.startsWith('data:') || src.startsWith('http')) return src;
+        if (!src.startsWith('blob:')) return src;
+
+        try {
+          // เพิ่ม timeout เพื่อไม่ให้รอจนเกินไป
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 วินาที timeout
+
+          const response = await fetch(src, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          
+          if (!response.ok) {
+            console.warn(`Failed to fetch blob URL: ${src.substring(0, 30)}...`);
+            // ส่งคืน placeholder image ที่มีขนาดเล็ก
+            return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAACXBIWXMAAAsTAAALEwEAmpwYAAAA/klEQVR4nO3Vvy4EURTH8Q8bIeEJJCIRsQ9AoVDRaBQUCi9AQ7GvQGNfQYlEvIFCo1JpKGWjkA2bpVhzxdbO/FsT8SU3Oc05v9+5Z+69xdShcotb3GS2Q4wxCzW+yibOsZbJPsZ8uLo20JMTZDmy3mEStTM4xGSOuIXAMlbxxmsMrwmijT1s5AgDtxh8FbezwH+gBr6Fx2zgUKzGS5FgiF+xhRGmI3cGK6JiCZawiPOQX8c9HnATtjbecYbzZPJ77CCE6E/ZTJ6S4y3Ld0XvstzrxwgqFQgq2MZrZs2a2f7rBPXwZKe4xUO/8tTdSNLDOVFq/6x5y5kLWPoBXnL4nvcgisQAAAAASUVORK5CYII=';
+          }
+          
+          const blob = await response.blob();
+          
+          return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror  = () => {
+              console.warn(`Failed to read blob from URL: ${src.substring(0, 30)}...`);
+              // ส่งคืน placeholder image ที่มีขนาดเล็ก
+              resolve('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAACXBIWXMAAAsTAAALEwEAmpwYAAAA/klEQVR4nO3Vvy4EURTH8Q8bIeEJJCIRsQ9AoVDRaBQUCi9AQ7GvQGNfQYlEvIFCo1JpKGWjkA2bpVhzxdbO/FsT8SU3Oc05v9+5Z+69xdShcotb3GS2Q4wxCzW+yibOsZbJPsZ8uLo20JMTZDmy3mEStTM4xGSOuIXAMlbxxmsMrwmijT1s5AgDtxh8FbezwH+gBr6Fx2zgUKzGS5FgiF+xhRGmI3cGK6JiCZawiPOQX8c9HnATtjbecYbzZPJ77CCE6E/ZTJ6S4y3Ld0XvstzrxwgqFQgq2MZrZs2a2f7rBPXwZKe4xUO/8tTdSNLDOVFq/6x5y5kLWPoBXnL4nvcgisQAAAAASUVORK5CYII=');
+            };
+            reader.readAsDataURL(blob);
+          });
+        } catch (error) {
+          console.warn(`Failed to load image from blob URL: ${src.substring(0, 30)}...`, error);
+          // ส่งคืน placeholder image ที่มีขนาดเล็ก
+          return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAACXBIWXMAAAsTAAALEwEAmpwYAAAA/klEQVR4nO3Vvy4EURTH8Q8bIeEJJCIRsQ9AoVDRaBQUCi9AQ7GvQGNfQYlEvIFCo1JpKGWjkA2bpVhzxdbO/FsT8SU3Oc05v9+5Z+69xdShcotb3GS2Q4wxCzW+yibOsZbJPsZ8uLo20JMTZDmy3mEStTM4xGSOuIXAMlbxxmsMrwmijT1s5AgDtxh8FbezwH+gBr6Fx2zgUKzGS5FgiF+xhRGmI3cGK6JiCZawiPOQX8c9HnATtjbecYbzZPJ77CCE6E/ZTJ6S4y3Ld0XvstzrxwgqFQgq2MZrZs2a2f7rBPXwZKe4xUO/8tTdSNLDOVFq/6x5y5kLWPoBXnL4nvcgisQAAAAASUVORK5CYII=';
+        }
+      };
+
+      // Build elements array with unique z-index AND safe image.src
+      const elementsWithZIndex = await Promise.all(
+        elements.map(async (el, index) => {
+          if (el.type === 'image') {
+            const safeSrc = await normaliseSrc(el.src);
+            return { ...el, src: safeSrc, layer: el.layer ?? index * 10 };
+          }
+          return { ...el, layer: el.layer ?? index * 10 };
+        })
+      );
       
       const contentObj = {
         elements: elementsWithZIndex,
@@ -91,12 +137,9 @@ export const useTemplateActions = () => {
             };
           }
           else if (el.type === 'image') {
-            // สำหรับรูปภาพ ถ้ามี src เป็น data URL ที่ยาวมาก ให้ลบออก
-            // ลบ data URL src ออกเพื่อลดขนาด
-            return {
-              ...essential,
-              src: el.src?.startsWith('data:') ? '<data-url-removed>' : el.src
-            };
+            // keep data-URL; if unbelievably large the DBA should store
+            // images externally and keep only URL – don't silently strip.
+            return { ...essential, src: el.src };
           }
           
           return essential;
@@ -164,7 +207,7 @@ export const useTemplateActions = () => {
       // รับ token จาก localStorage
       const token = localStorage.getItem('token');
       if (!token) {
-        throw new Error('กรุณาเข้าสู่ระบบก่อนใช้งาน');
+        throw new Error('Please login before using this feature');
       }
 
       // ตั้งค่า API URL ให้ถูกต้อง
@@ -192,7 +235,7 @@ export const useTemplateActions = () => {
         
         if (response.ok) {
           const data = await response.json();
-          message.success('บันทึกการแก้ไข template เรียบร้อยแล้ว');
+          message.success('Template updated successfully');
           setLastSaved(new Date());
           return data;
         } else {
@@ -210,7 +253,7 @@ export const useTemplateActions = () => {
           
           if (postResponse.ok) {
             const data = await postResponse.json();
-            message.success('บันทึกการแก้ไข template เรียบร้อยแล้ว');
+            message.success('Template updated successfully');
             setLastSaved(new Date());
             return data;
           } else {
@@ -232,7 +275,7 @@ export const useTemplateActions = () => {
         if (response.ok) {
           const data = await response.json();
           setTemplateId(data.templateID?.toString() || data.id?.toString());
-          message.success('บันทึก template เรียบร้อยแล้ว');
+          message.success('Template saved successfully');
           setLastSaved(new Date());
           
           // ในกรณีที่มีการระบุ productKey และ customerKey ให้เพิ่มข้อมูลไปยังตาราง mapping
@@ -251,12 +294,12 @@ export const useTemplateActions = () => {
           return data;
         } else {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || response.statusText);
+          throw new Error('Template is corrupted. Please create a new template');
         }
       }
     } catch (error: any) {
-      console.error('เกิดข้อผิดพลาดในการบันทึก template:', error);
-      message.error(`บันทึก template ไม่สำเร็จ: ${error.message}`);
+      console.error('Error saving template:', error);
+      message.error(`Failed to save template: ${error.message}`);
       return null;
     } finally {
       setIsSaving(false);
@@ -345,7 +388,7 @@ export const useTemplateActions = () => {
       // ถ้าไม่มี initialTemplate ให้เรียก API ตามปกติ
       const token = localStorage.getItem('token');
       if (!token) {
-        throw new Error('กรุณาเข้าสู่ระบบก่อนใช้งาน');
+        throw new Error('Please login before using this feature');
       }
       
       const API_BASE_URL = getApiBaseUrl();
@@ -380,7 +423,7 @@ export const useTemplateActions = () => {
         }
       } catch (e) {
         console.error('Error parsing template content from API:', e);
-        throw new Error('Template เสียหาย กรุณาสร้าง template ใหม่');
+        throw new Error('Template is corrupted. Please create a new template');
       }
       
       // ตรวจสอบรูปแบบของ elements
@@ -418,7 +461,7 @@ export const useTemplateActions = () => {
       };
     } catch (error: any) {
       console.error('Error loading template:', error);
-      message.error(`เกิดข้อผิดพลาดในการโหลด template: ${error.message}`);
+      message.error(`Error loading template: ${error.message}`);
       return null;
     } finally {
       setIsLoading(false);
@@ -441,7 +484,7 @@ export const useTemplateActions = () => {
       return JSON.stringify(templateData, null, 2);
     } catch (error) {
       console.error('Error exporting template:', error);
-      message.error('เกิดข้อผิดพลาดในการส่งออก template');
+      message.error('Error exporting template');
       return '';
     }
   }, []);
@@ -455,7 +498,7 @@ export const useTemplateActions = () => {
       const data = JSON.parse(json);
       
       if (!data.elements || !Array.isArray(data.elements)) {
-        throw new Error('รูปแบบ JSON ไม่ถูกต้อง (elements ไม่พบหรือไม่ใช่ array)');
+        throw new Error('Invalid JSON format (elements not found or not an array)');
       }
       
       const canvasSize = data.canvasSize || { width: 400, height: 400 };
@@ -466,7 +509,7 @@ export const useTemplateActions = () => {
       };
     } catch (error: any) {
       console.error('Error importing template:', error);
-      message.error(`เกิดข้อผิดพลาดในการนำเข้า template: ${error.message}`);
+      message.error(`Error importing template: ${error.message}`);
       return null;
     }
   }, []);

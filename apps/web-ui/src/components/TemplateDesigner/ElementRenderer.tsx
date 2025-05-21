@@ -120,6 +120,7 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
   isSelected = false
 }) => {
   const [imageObj, setImageObj] = useState<HTMLImageElement | null>(null);
+  const [imageLoadError, setImageLoadError] = useState<boolean>(false);
 
   // When QR element loads, update data URL if needed
   useEffect(() => {
@@ -138,11 +139,41 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
   // For image elements, load image when src changes
   useEffect(() => {
     if (element.type === 'image' && (element as ImageElement).src) {
+      const imgSrc = (element as ImageElement).src;
+      
+      // Reset error state when trying to load a new image
+      setImageLoadError(false);
+      setImageObj(null);
+      
+      // Don't try to load images with invalid/removed data URLs
+      if (imgSrc === '<data-url-removed>') {
+        setImageLoadError(true);
+        return;
+      }
+      
       const img = new window.Image();
-      img.src = (element as ImageElement).src;
+      
+      // Handle image load errors
+      img.onerror = () => {
+        console.error(`Failed to load image: ${imgSrc.substring(0, 100)}...`);
+        setImageLoadError(true);
+        
+        // Revoke blob URL if it failed to load to clean up resources
+        if (imgSrc.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(imgSrc);
+          } catch (e) {
+            console.warn('Failed to revoke object URL:', e);
+          }
+        }
+      };
+      
       img.onload = () => {
         setImageObj(img);
+        setImageLoadError(false);
       };
+      
+      img.src = imgSrc;
     }
   }, [element]);
 
@@ -393,6 +424,41 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
       );
     }
     case 'image': {
+      // If there was an error loading the image, show a placeholder with error message
+      if (imageLoadError) {
+        return (
+          <Group>
+            <Rect
+              x={0}
+              y={0}
+              width={element.width}
+              height={element.height}
+              fill="#f5f5f5"
+              stroke="#ccc"
+              strokeWidth={1}
+              dash={[5, 5]}
+              cornerRadius={2}
+              perfectDrawEnabled={false}
+              listening={true}
+            />
+            <Text
+              x={0}
+              y={0}
+              width={element.width}
+              height={element.height}
+              text="⚠️ Image failed to load"
+              fontSize={12}
+              fontFamily="Arial"
+              fill="#666"
+              align="center"
+              verticalAlign="middle"
+              perfectDrawEnabled={false}
+              listening={false}
+            />
+          </Group>
+        );
+      }
+      
       return imageObj ? (
         <Image
           x={0}
@@ -403,7 +469,18 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
           perfectDrawEnabled={false}
           listening={true}
         />
-      ) : null;
+      ) : (
+        <Rect
+          x={0}
+          y={0}
+          width={element.width}
+          height={element.height}
+          fill="#f0f0f0"
+          stroke="#d9d9d9"
+          perfectDrawEnabled={false}
+          listening={true}
+        />
+      );
     }
     case 'qr': {
       const qrElement = element as QrElement;
