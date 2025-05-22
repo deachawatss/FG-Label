@@ -251,60 +251,6 @@ public class Program
         }
     }
     
-    // ฟังก์ชันสำหรับส่งงานพิมพ์เข้าคิว
-    private static Task PublishPrintJobToQueue2(int jobId, ILogger logger)
-    {
-        try
-        {
-            var rabbitmqHostname = Environment.GetEnvironmentVariable("RabbitMQ__HostName") ?? "rabbitmq";
-            var rabbitmqUsername = Environment.GetEnvironmentVariable("RabbitMQ__UserName") ?? "guest";
-            var rabbitmqPassword = Environment.GetEnvironmentVariable("RabbitMQ__Password") ?? "guest";
-                
-            var factory = new ConnectionFactory
-            {
-                HostName = rabbitmqHostname,
-                UserName = rabbitmqUsername,
-                Password = rabbitmqPassword
-            };
-                
-            using var connection = factory.CreateConnection();
-            using var channel = connection.CreateModel();
-                
-            // Ensure queue exists
-            channel.QueueDeclare(
-                queue: "print-jobs",
-                durable: true,
-                exclusive: false,
-                autoDelete: false,
-                arguments: null);
-                    
-            // Create message
-            var message = new
-            {
-                JobID = jobId
-            };
-                
-            // Convert to JSON and publish
-            var messageBody = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-                
-            channel.BasicPublish(
-                exchange: "",
-                routingKey: "print-jobs",
-                basicProperties: null,
-                body: messageBody);
-                    
-            logger.LogInformation("Print job {JobId} published to queue", jobId);
-            
-            return Task.CompletedTask;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error publishing print job {JobID} to queue: {Message}", jobId, ex.Message);
-            // Don't rethrow, we still want to return success to the client
-            return Task.CompletedTask;
-        }
-    }
-    
     /* ---------- JWT Helper ------------------------------------------------ */
     private static string GenerateJwtToken(string username)
     {
