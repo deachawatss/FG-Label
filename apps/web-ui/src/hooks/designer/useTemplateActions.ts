@@ -214,7 +214,7 @@ export const useTemplateActions = () => {
         engine: 'Canvas', // ใช้ engine 'Canvas' สำหรับ designer ใหม่
         paperSize: templateInfo.paperSize || '4x4',
         orientation: templateInfo.orientation || 'Portrait',
-        templateType: templateInfo.templateType || 'Standard', // ใช้ templateType เป็นค่าเดิม (ไม่ต้องแก้ไข)
+        templateType: templateInfo.labelType || 'Standard', // กำหนดให้ templateType มีค่าเท่ากับ labelType ที่ผู้ใช้เลือก
         labelType: templateInfo.labelType || 'Standard', // เพิ่ม labelType ที่ได้จาก TemplateInfo
         content: finalContent,
         customWidth: canvasSize.width,

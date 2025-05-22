@@ -1365,6 +1365,8 @@ public class Program
                 var productKey = template.TryGetProperty("productKey", out var prodKeyProp) ? prodKeyProp.GetString() : null;
                 var customerKey = template.TryGetProperty("customerKey", out var custKeyProp) ? custKeyProp.GetString() : null;
                 var content = template.TryGetProperty("content", out var contentProp) ? contentProp.GetString() : null;
+                var templateType = template.TryGetProperty("templateType", out var templateTypeProp) ? templateTypeProp.GetString() : 
+                                  (template.TryGetProperty("labelType", out var labelTypeProp) ? labelTypeProp.GetString() : "Standard");
                 
                 var incrementVersion = template.TryGetProperty("incrementVersion", out var incrVerProp) && incrVerProp.GetBoolean();
                 
@@ -1409,6 +1411,7 @@ public class Program
                             Content = @Content,
                             ProductKey = @ProductKey,
                             CustomerKey = @CustomerKey,
+                            TemplateType = @TemplateType,
                             UpdatedAt = GETDATE(),
                             Version = @Version,
                             Active = 1
@@ -1427,6 +1430,7 @@ public class Program
                             Content = content,
                             ProductKey = productKey,
                             CustomerKey = customerKey,
+                            TemplateType = templateType,
                             Version = newVersion,
                             TemplateID = templateID
                         });
@@ -1462,11 +1466,11 @@ public class Program
                         INSERT INTO FgL.LabelTemplate (
                             Name, Description, ProductKey, CustomerKey, 
                             Engine, PaperSize, Orientation, Content, Version,
-                            CreatedAt, UpdatedAt, Active
+                            CreatedAt, UpdatedAt, Active, TemplateType
                         ) VALUES (
                             @Name, @Description, @ProductKey, @CustomerKey,
                             @Engine, @PaperSize, @Orientation, @Content, 1,
-                            GETDATE(), GETDATE(), 1
+                            GETDATE(), GETDATE(), 1, @TemplateType
                         );
                         
                         SELECT SCOPE_IDENTITY() AS TemplateID, 1 AS Version;";
@@ -1480,7 +1484,8 @@ public class Program
                         Engine = engine,
                         PaperSize = paperSize,
                         Orientation = orientation,
-                        Content = content
+                        Content = content,
+                        TemplateType = templateType
                     });
                     
                     var newTemplateId = (int)result.TemplateID;
@@ -1592,8 +1597,8 @@ public class Program
             }
         }).RequireAuthorization();
 
-        // GET /api/templates/lookup - ค้นหา template จาก productKey และ customerKey
-        app.MapGet("/api/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, ILogger<Program> logger) =>
+        /* ---------- 4.15 GET /api/templates/lookup ------------------------------ */
+        app.MapGet("/api/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, string? labelType, string? shipToCountry, ILogger<Program> logger) =>
         {
             if (string.IsNullOrEmpty(productKey) && string.IsNullOrEmpty(customerKey))
             {
@@ -1602,30 +1607,59 @@ public class Program
             
             try
             {
+                // ใช้ค่า labelType ที่รับมา ถ้าไม่มีให้ใช้ค่าเริ่มต้นเป็น Standard
+                string templateType = !string.IsNullOrEmpty(labelType) ? labelType : "Standard";
+                string shipToCountryValue = shipToCountry ?? "";
+                
+                logger.LogInformation(
+                    "Looking up template with productKey={0}, customerKey={1}, templateType={2}, shipToCountry={3}", 
+                    productKey ?? "(null)", 
+                    customerKey ?? "(null)", 
+                    templateType,
+                    shipToCountryValue);
+                
                 // เรียกใช้ stored procedure ค้นหา template โดยใช้ productKey และ customerKey
                 var result = await connection.QueryFirstOrDefaultAsync<dynamic>(
                     "FgL.GetTemplateByProductAndCustomerKeys",
-                    new { productKey, customerKey },
+                    new { productKey, customerKey, templateType, shipToCountry = shipToCountryValue },
                     commandType: System.Data.CommandType.StoredProcedure
                 );
                 
                 // ถ้าไม่พบ template จะได้ result ที่มีค่า templateID เป็น null
                 if (result == null)
                 {
-                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                    logger.LogWarning(
+                        "No template found for productKey={0}, customerKey={1}, templateType={2}, shipToCountry={3}", 
+                        productKey ?? "(null)", 
+                        customerKey ?? "(null)", 
+                        templateType,
+                        shipToCountryValue);
+                    return Results.NotFound(new { message = $"No template found for the specified product and customer keys with type {templateType}" });
                 }
                 
                 var templateId = result?.TemplateID;
                 if (templateId == null)
                 {
-                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                    logger.LogWarning(
+                        "Template ID is null for productKey={0}, customerKey={1}, templateType={2}, shipToCountry={3}", 
+                        productKey ?? "(null)", 
+                        customerKey ?? "(null)", 
+                        templateType,
+                        shipToCountryValue);
+                    return Results.NotFound(new { message = $"No template found for the specified product and customer keys with type {templateType}" });
                 }
                 
+                logger.LogInformation($"Found template ID: {templateId}");
                 return Results.Ok(new { templateID = templateId });
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error looking up template by product and customer keys");
+                logger.LogError(ex, 
+                    "Error looking up template by product key {0}, customer key {1}, label type {2}, shipToCountry {3}",
+                    productKey ?? "(null)", 
+                    customerKey ?? "(null)",
+                    labelType ?? "Standard",
+                    shipToCountry ?? "(null)");
                 return Results.Problem(
                     title: "Error looking up template",
                     detail: ex.Message,
@@ -1635,7 +1669,7 @@ public class Program
         }).RequireAuthorization();
 
         // เพิ่ม endpoint เดิม /templates/lookup เพื่อรักษาความเข้ากันได้กับการเรียกใช้งานเดิม
-        app.MapGet("/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, ILogger<Program> logger) =>
+        app.MapGet("/templates/lookup", async (HttpContext ctx, IDbConnection connection, string? productKey, string? customerKey, string? labelType, string? shipToCountry, ILogger<Program> logger) =>
         {
             // เหมือนกับ endpoint /api/templates/lookup
             if (string.IsNullOrEmpty(productKey) && string.IsNullOrEmpty(customerKey))
@@ -1645,30 +1679,59 @@ public class Program
             
             try
             {
+                // ใช้ค่า labelType ที่รับมา ถ้าไม่มีให้ใช้ค่าเริ่มต้นเป็น Standard
+                string templateType = !string.IsNullOrEmpty(labelType) ? labelType : "Standard";
+                string shipToCountryValue = shipToCountry ?? "";
+                
+                logger.LogInformation(
+                    "Legacy lookup template with productKey={0}, customerKey={1}, templateType={2}, shipToCountry={3}", 
+                    productKey ?? "(null)", 
+                    customerKey ?? "(null)", 
+                    templateType,
+                    shipToCountryValue);
+                
                 // เรียกใช้ stored procedure ค้นหา template โดยใช้ productKey และ customerKey
                 var result = await connection.QueryFirstOrDefaultAsync<dynamic>(
                     "FgL.GetTemplateByProductAndCustomerKeys",
-                    new { productKey, customerKey },
+                    new { productKey, customerKey, templateType, shipToCountry = shipToCountryValue },
                     commandType: System.Data.CommandType.StoredProcedure
                 );
                 
                 // ถ้าไม่พบ template จะได้ result ที่มีค่า templateID เป็น null
                 if (result == null)
                 {
-                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                    logger.LogWarning(
+                        "Legacy - No template found for productKey={0}, customerKey={1}, templateType={2}, shipToCountry={3}", 
+                        productKey ?? "(null)", 
+                        customerKey ?? "(null)", 
+                        templateType,
+                        shipToCountryValue);
+                    return Results.NotFound(new { message = $"No template found for the specified product and customer keys with type {templateType}" });
                 }
                 
                 var templateId = result?.TemplateID;
                 if (templateId == null)
                 {
-                    return Results.NotFound(new { message = "No template found for the specified product and customer keys" });
+                    logger.LogWarning(
+                        "Legacy - Template ID is null for productKey={0}, customerKey={1}, templateType={2}, shipToCountry={3}", 
+                        productKey ?? "(null)", 
+                        customerKey ?? "(null)", 
+                        templateType,
+                        shipToCountryValue);
+                    return Results.NotFound(new { message = $"No template found for the specified product and customer keys with type {templateType}" });
                 }
                 
+                logger.LogInformation($"Legacy - Found template ID: {templateId}");
                 return Results.Ok(new { templateID = templateId });
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error looking up template by product and customer keys (legacy endpoint)");
+                logger.LogError(ex, 
+                    "Legacy - Error looking up template by product key {0}, customer key {1}, label type {2}, shipToCountry {3}",
+                    productKey ?? "(null)", 
+                    customerKey ?? "(null)",
+                    labelType ?? "Standard",
+                    shipToCountry ?? "(null)");
                 return Results.Problem(
                     title: "Error looking up template",
                     detail: ex.Message,

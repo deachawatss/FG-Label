@@ -776,7 +776,9 @@ const getShipToCountry = (item: any): string => {
       'contentBinary',
       'SHIPTO_COUNTRY',
       'ShipToCountry',
-      'shipToCountry'
+      'shipToCountry',
+      'LotCodeCaption',
+      'FillLevel','BL_Product','BestBeforeCaption'
     ];
     
     return Object.entries(batchDetails)

@@ -113,7 +113,7 @@ namespace FgLabel.Api.Controllers
         /// Lookup template by product and customer keys
         /// </summary>
         [HttpGet("lookup")]
-        public async Task<IActionResult> Lookup([FromQuery] string? productKey, [FromQuery] string? customerKey)
+        public async Task<IActionResult> Lookup([FromQuery] string? productKey, [FromQuery] string? customerKey, [FromQuery] string? labelType)
         {
             try
             {
@@ -122,26 +122,44 @@ namespace FgLabel.Api.Controllers
                     return BadRequest(new { error = "At least one of productKey or customerKey must be provided" });
                 }
                 
+                // ใช้ค่า labelType ที่รับมา ถ้าไม่มีให้ใช้ค่าเริ่มต้นเป็น Standard
+                string templateType = !string.IsNullOrEmpty(labelType) ? labelType : "Standard";
+                
+                _logger.LogInformation(
+                    "Looking up template with productKey={ProductKey}, customerKey={CustomerKey}, templateType={TemplateType}", 
+                    productKey ?? "(null)", 
+                    customerKey ?? "(null)", 
+                    templateType);
+                
                 // เรียกใช้ stored procedure เพื่อค้นหา template
                 var result = await _connection.QueryFirstOrDefaultAsync<dynamic>(
                     "FgL.GetTemplateByProductAndCustomerKeys",
-                    new { productKey, customerKey },
+                    new { productKey, customerKey, templateType },
                     commandType: CommandType.StoredProcedure
                 );
                 
                 // ถ้าไม่พบ template
                 if (result == null || result?.TemplateID == null)
                 {
-                    return NotFound(new { error = "No template found for the specified product and customer keys" });
+                    _logger.LogWarning(
+                        "No template found for productKey={ProductKey}, customerKey={CustomerKey}, templateType={TemplateType}", 
+                        productKey ?? "(null)", 
+                        customerKey ?? "(null)", 
+                        templateType);
+                    return NotFound(new { error = $"No template found for the specified product and customer keys with type {templateType}" });
                 }
                 
+                // ปรับเปลี่ยนจาก dynamic เป็น string เพื่อแก้ไขปัญหา LogInformation กับ dynamic argument
+                string templateIdStr = result?.TemplateID?.ToString() ?? "null";
+                _logger.LogInformation("Found template ID: {TemplateID}", templateIdStr);
                 return Ok(new { templateID = result?.TemplateID });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error looking up template by product key {ProductKey} and customer key {CustomerKey}", 
+                _logger.LogError(ex, "Error looking up template by product key {ProductKey}, customer key {CustomerKey}, and label type {LabelType}", 
                     productKey ?? "(null)", 
-                    customerKey ?? "(null)");
+                    customerKey ?? "(null)",
+                    labelType ?? "Standard");
                 return StatusCode(500, new { error = "An error occurred while looking up the template" });
             }
         }

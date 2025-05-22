@@ -1,10 +1,11 @@
 /*============================================================================== 
   FG-Label Database Schema Installation Script  (FULL REBUILD – KEEP DATA)  
   Database : TFCPILOT2 
-  Version  : 2.6-revI9-keep  –  22-May-2025 19:00
+  Version  : 3.0-revJ1-keep  –  23-May-2025 19:00
   Notes    : • ไม่ DROP FgL.BME_LABEL / FgL.BME_LABEL_WIP
              • ถ้าไม่มีสองตารางนี้จึงสร้างใหม่พร้อมดัชนี
-             • Objects อื่นรีเซ็ตตาม rev I9 (Fix duplicate rows & ShipToCountry)
+             • แก้ไขให้รองรับกรณี 1 BatchNo มีหลาย CustKey และหลาย ShipToCountry
+             • เพิ่มตาราง FgL.BatchCustomerMapping เพื่อเก็บความสัมพันธ์
 ==============================================================================*/
 
 USE [TFCPILOT2];
@@ -62,6 +63,7 @@ IF OBJECT_ID('FgL.LabelTemplate'        ,'U') IS NOT NULL DROP TABLE FgL.LabelTe
 IF OBJECT_ID('FgL.ADConfig'             ,'U') IS NOT NULL DROP TABLE FgL.ADConfig;
 IF OBJECT_ID('FgL.[User]'               ,'U') IS NOT NULL DROP TABLE FgL.[User];
 IF OBJECT_ID('FgL.Printer'              ,'U') IS NOT NULL DROP TABLE FgL.Printer;
+IF OBJECT_ID('FgL.BatchCustomerMapping' ,'U') IS NOT NULL DROP TABLE FgL.BatchCustomerMapping;
 /*  ไม่ DROP BME_LABEL_WIP / BME_LABEL */
 
 IF OBJECT_ID('FgL.tvf_Label_PrintData','IF') IS NOT NULL DROP FUNCTION FgL.tvf_Label_PrintData;
@@ -193,6 +195,15 @@ CREATE NONCLUSTERED INDEX IX_BME_LABEL_ItemCust ON FgL.BME_LABEL(ItemKey,CustKey
 IF NOT EXISTS (SELECT 1 FROM sys.indexes 
                WHERE object_id=OBJECT_ID('FgL.BME_LABEL') AND name='IX_BME_LABEL_ItemKey')
     CREATE NONCLUSTERED INDEX IX_BME_LABEL_ItemKey ON FgL.BME_LABEL(ItemKey);
+
+/* เพิ่มดัชนีสำหรับ CustKey และ ShipToCountry */
+IF NOT EXISTS (SELECT 1 FROM sys.indexes 
+               WHERE object_id=OBJECT_ID('FgL.BME_LABEL') AND name='IX_BME_LABEL_CustKey')
+    CREATE NONCLUSTERED INDEX IX_BME_LABEL_CustKey ON FgL.BME_LABEL(CustKey);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes 
+               WHERE object_id=OBJECT_ID('FgL.BME_LABEL') AND name='IX_BME_LABEL_ShipToCountry')
+    CREATE NONCLUSTERED INDEX IX_BME_LABEL_ShipToCountry ON FgL.BME_LABEL(SHIPTO_COUNTRY);
 GO
 
 /*---------------------------------------------------------------------------  
@@ -205,6 +216,34 @@ SELECT * INTO FgL.BME_LABEL_WIP FROM FgL.BME_LABEL WHERE 1=0;
 END
 ELSE
     PRINT N'★ 4) Keeping existing FgL.BME_LABEL_WIP (data preserved)';
+GO 
+
+/*---------------------------------------------------------------------------  
+  4.1) TABLE FgL.BatchCustomerMapping - เพิ่มใหม่สำหรับเก็บข้อมูล CustomerKey ของแต่ละ BatchNo
+---------------------------------------------------------------------------*/
+IF OBJECT_ID('FgL.BatchCustomerMapping','U') IS NULL
+BEGIN
+    PRINT N'★ 4.1) Creating table FgL.BatchCustomerMapping (new)';
+    CREATE TABLE FgL.BatchCustomerMapping(
+        MappingID INT IDENTITY(1,1) PRIMARY KEY,
+        BatchNo NVARCHAR(30) NOT NULL,
+        ItemKey NVARCHAR(50) NOT NULL,
+        CustKey NVARCHAR(50) NOT NULL,
+        ShipToCountry NVARCHAR(255) NULL,
+        Active BIT NOT NULL DEFAULT 1,
+        CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+        UpdatedAt DATETIME NULL,
+        CONSTRAINT UQ_BatchCustomerMapping_BatchNo UNIQUE (BatchNo) -- เพิ่ม Constraint ให้ BatchNo ต้องไม่ซ้ำกัน
+    );
+    
+    CREATE NONCLUSTERED INDEX IX_BCM_BatchNo ON FgL.BatchCustomerMapping(BatchNo);
+    CREATE NONCLUSTERED INDEX IX_BCM_BatchItem ON FgL.BatchCustomerMapping(BatchNo, ItemKey);
+    
+    -- การนำเข้าข้อมูลจะทำภายหลังหลังจากที่สร้าง View ที่เกี่ยวข้องแล้ว
+    PRINT N'★ Table FgL.BatchCustomerMapping created (data will be imported later)';
+END
+ELSE
+    PRINT N'★ 4.1) FgL.BatchCustomerMapping already exists';
 GO
 
 /*---------------------------------------------------------------------------  
@@ -303,6 +342,7 @@ CREATE TABLE FgL.LabelTemplate(
     Description   NVARCHAR(255) NULL,
     ProductKey    NVARCHAR(50)  NULL,
     CustomerKey   NVARCHAR(50)  NULL,
+    ShipToCountry NVARCHAR(255) NULL, -- เพิ่มฟิลด์นี้เพื่อให้สามารถระบุ template ตามประเทศได้
     Engine        NVARCHAR(50)  NOT NULL DEFAULT 'ZPL',
     PaperSize     NVARCHAR(50)  NULL,
     Orientation   NVARCHAR(20)  NULL CHECK (Orientation IN ('Portrait','Landscape')),
@@ -319,6 +359,7 @@ CREATE TABLE FgL.LabelTemplate(
 );
 CREATE NONCLUSTERED INDEX IX_LabelTemplate_Active          ON FgL.LabelTemplate(Active);
 CREATE NONCLUSTERED INDEX IX_LabelTemplate_ProductCustomer ON FgL.LabelTemplate(ProductKey,CustomerKey);
+CREATE NONCLUSTERED INDEX IX_LabelTemplate_ShipToCountry   ON FgL.LabelTemplate(ShipToCountry);
     PRINT N'★ 8) FgL.LabelTemplate created';
 END
 ELSE
@@ -388,6 +429,7 @@ CREATE TABLE FgL.LabelPrintJob(
     PrinterID     INT           NULL,
     ItemKey       NVARCHAR(50)  NULL,
     CustKey       NVARCHAR(50)  NULL,
+    ShipToCountry NVARCHAR(255) NULL, -- เพิ่มฟิลด์นี้เพื่อระบุประเทศที่ใช้พิมพ์
     PrintQuantity INT           NOT NULL DEFAULT 1,
     PrinterName   NVARCHAR(100) NULL,
     PrintStatus   NVARCHAR(20)  NOT NULL DEFAULT 'Pending',
@@ -400,11 +442,12 @@ CREATE TABLE FgL.LabelPrintJob(
     CONSTRAINT FK_LPJ_Printer  FOREIGN KEY (PrinterID)  REFERENCES FgL.Printer(PrinterID)
 );
 CREATE NONCLUSTERED INDEX IX_LPJ_BatchStatus ON FgL.LabelPrintJob(BatchNo,PrintStatus);
+CREATE NONCLUSTERED INDEX IX_LPJ_ShipToCountry ON FgL.LabelPrintJob(ShipToCountry);
     PRINT N'★ 11) FgL.LabelPrintJob created';
 END
 ELSE
     PRINT N'★ 11) FgL.LabelPrintJob already exists';
-GO
+GO 
 
 /*---------------------------------------------------------------------------  
  12-14) Helper TVF และ Validate PROC  
@@ -511,568 +554,58 @@ ELSE
 GO
 
 /*---------------------------------------------------------------------------  
-  15) VIEW  FgL.vw_Label_PrintSummary (ShipToCountry alias)  
+  15) VIEW  FgL.vw_Label_PrintSummary (แก้ไขให้ตรงตามหลักการ 1 BatchNo = 1 ชุดข้อมูล)  
 ---------------------------------------------------------------------------*/
-PRINT N'★ 15) Creating VIEW FgL.vw_Label_PrintSummary';
+PRINT N'★ 15) Creating VIEW FgL.vw_Label_PrintSummary (standard version)';
 
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
-IF OBJECT_ID('FgL.vw_Label_PrintSummary','V') IS NULL
-BEGIN
-    EXEC('CREATE VIEW FgL.vw_Label_PrintSummary AS
+CREATE OR ALTER VIEW FgL.vw_Label_PrintSummary AS
+/*--------------------------------------------------------------
+  STEP-1  KeyResolve : เข้าถึง ItemKey และ CustKey จาก BatchNo
+--------------------------------------------------------------*/
 WITH KeyResolve AS (
     SELECT
         PN.BatchNo,
-            ItemKeyResolved = COALESCE(NULLIF(PN.ItemKey,''''), NULLIF(PB0.Assembly_Item_Key,'''')),
-            CustKeyResolved = COALESCE(NULLIF(PN.CustKey,''''), NULLIF(PB0.CustKey,'''')) 
+        ItemKeyResolved = COALESCE(NULLIF(PN.ItemKey,''), NULLIF(PB0.Assembly_Item_Key,'')),
+        CustKeyResolved = COALESCE(NULLIF(PN.CustKey,''), NULLIF(PB0.CustKey,'')) 
     FROM dbo.PNMAST PN
     LEFT JOIN dbo.PNBomInfo PB0 ON PB0.BatchNo = PN.BatchNo
 ),
-BaseData AS (
-    SELECT
-        PN.BatchNo,
-            PN.BatchTicketDate,
-            PN.SchStartDate,
-            PN.ActStartDate            AS ProductionDate,
-            PN.ActCompletionDate,
-            KR.ItemKeyResolved,
-            KR.CustKeyResolved,
-            BL.CustKey,
-            BL.ItemKey,
-        BL.[REMAINING_SHELF-LIFE],
-            BL.SHIPTO_COUNTRY AS ShipToCountry,     -- ★ alias ใหม่
-        BL.IMPORTED_BY,
-            IM.Desc1                       AS Product,
-            IM.DaysToExpire,
-            AR.Customer_Name,
-            AR.Address_1, AR.Address_2, AR.Address_3,
-            AR.City, AR.State, AR.Country,
-            PB.FillLevel, PB.FillUOM, PB.FormulaID,
-            PB.Assembly_Item_Key, PB.Assembly_Location,
-            PB.AssemblyType, PB.FillMeasuredIN, PB.BOMUOM,
-            T.TemplateID, T.Name AS TemplateName, T.UpdatedAt AS TemplateUpdatedAt,
-            T.Content, T.Engine, T.PaperSize,
-            TW.TotalWeightKG, PK.BagWKG, PK.CartonWKG,
-            BagsCalc.TotalBags, BagsCalc.TotalCTN
-    FROM dbo.PNMAST PN
-        INNER JOIN KeyResolve KR ON KR.BatchNo = PN.BatchNo
-        LEFT  JOIN FgL.BME_LABEL BL ON BL.ItemKey = KR.ItemKeyResolved
-        LEFT  JOIN dbo.INMAST IM    ON IM.ItemKey = KR.ItemKeyResolved
-        LEFT  JOIN dbo.ARCUST AR    ON AR.Customer_Key = KR.CustKeyResolved
-        OUTER APPLY (
-            SELECT TOP 1 *
-            FROM dbo.PNBomInfo p
-            WHERE p.BatchNo = PN.BatchNo
-            ORDER BY CASE WHEN p.Assembly_Item_Key = KR.ItemKeyResolved THEN 0 ELSE 1 END, p.LineID
-        ) PB
-        LEFT JOIN FgL.LabelTemplate T ON T.Active = 1
-                                     AND T.ProductKey  = KR.ItemKeyResolved
-                                     AND (T.CustomerKey = KR.CustKeyResolved OR T.CustomerKey IS NULL)
-        CROSS APPLY (SELECT TotalWeightKG = COALESCE(NULLIF(PN.TotalFGWeightYielded,0), NULLIF(PN.BatchWeight,0), 0)) TW
-        CROSS APPLY (
-            SELECT CartonWKG = CASE WHEN BL.PACKUNIT1 LIKE ''%ctn%'' THEN NULLIF(BL.PACKSIZE1,0)
-                                    WHEN BL.PACKUNIT2 LIKE ''%ctn%'' THEN NULLIF(BL.PACKSIZE2,0) END,
-                   BagWKG    = CASE WHEN BL.PACKUNIT2 LIKE ''%bag%'' THEN NULLIF(BL.PACKSIZE2,0)
-                                    WHEN BL.PACKUNIT1 LIKE ''%bag%'' THEN NULLIF(BL.PACKSIZE1,0) END
-        ) PK
-        CROSS APPLY (
-            SELECT TotalBags = CASE WHEN PK.BagWKG IS NOT NULL AND PK.BagWKG > 0
-                                       THEN CEILING(TW.TotalWeightKG/PK.BagWKG) ELSE 1 END,
-                   TotalCTN  = CASE WHEN PK.CartonWKG IS NOT NULL AND PK.CartonWKG > 0
-                                       THEN CEILING(TW.TotalWeightKG/PK.CartonWKG) END
-        ) BagsCalc
-    )
-    SELECT * FROM BaseData;');
-    PRINT N'★ 15) FgL.vw_Label_PrintSummary created';
-END
-ELSE
-    PRINT N'★ 15) FgL.vw_Label_PrintSummary already exists';
-GO
-
-/*---------------------------------------------------------------------------  
-  16) TVF  FgL.tvf_Label_PrintData  
----------------------------------------------------------------------------*/
-PRINT N'★ 16) Creating TVF FgL.tvf_Label_PrintData';
-
-SET ANSI_NULLS ON;
-SET QUOTED_IDENTIFIER ON;
-GO
-
-IF OBJECT_ID('FgL.tvf_Label_PrintData','IF') IS NULL
-BEGIN
-    EXEC('CREATE FUNCTION FgL.tvf_Label_PrintData
-(
-    @BatchNo NVARCHAR(30),
-    @BagNo   NVARCHAR(10) = NULL
-)
-RETURNS TABLE
-AS RETURN
-(
-    SELECT  S.*,
-            BG.BagNo,
-            BG.BagSequence,
-            BG.BagPosition,
-            BG.TotalBags  AS BagNumbers_Total
-    FROM    FgL.vw_Label_PrintSummary S
-    CROSS   APPLY dbo.tvf_GetBagNumbersRange(S.BatchNo,1,S.TotalBags,S.TotalBags) BG
-    WHERE   S.BatchNo = @BatchNo
-      AND  (@BagNo IS NULL OR BG.BagNo = @BagNo)
-    );');
-    PRINT N'★ 16) FgL.tvf_Label_PrintData created';
-END
-ELSE
-    PRINT N'★ 16) FgL.tvf_Label_PrintData already exists';
-GO
-
-/*---------------------------------------------------------------------------  
-  17) PROC FgL.usp_GetLabelDataByBatchNo  
----------------------------------------------------------------------------*/
-PRINT N'★ 17) Creating PROC FgL.usp_GetLabelDataByBatchNo';
-
-SET ANSI_NULLS ON;
-SET QUOTED_IDENTIFIER ON;
-GO
-
-IF OBJECT_ID('FgL.usp_GetLabelDataByBatchNo','P') IS NULL
-BEGIN
-    EXEC('CREATE PROCEDURE FgL.usp_GetLabelDataByBatchNo
-    @BatchNo NVARCHAR(30),
-    @BagNo   NVARCHAR(10) = NULL
-AS
-BEGIN
-    SET NOCOUNT ON;
-
-        /* ถ้าไม่ระบุ BagNo → ส่งสรุประดับ Batch ไม่ซ้ำ */
-    IF @BagNo IS NULL
-    BEGIN
-        SELECT *, 1 AS LabelRowNo
-        FROM   FgL.vw_Label_PrintSummary
-        WHERE  BatchNo = @BatchNo
-        ORDER  BY ItemKey, CustKey;
-        RETURN;
-    END
-
-        /* Bag-level */
-    SELECT *, ROW_NUMBER() OVER (ORDER BY BagSequence) AS LabelRowNo
-    FROM   FgL.tvf_Label_PrintData(@BatchNo,@BagNo)
-    ORDER  BY BagSequence;
-    END;');
-    PRINT N'★ 17) FgL.usp_GetLabelDataByBatchNo created';
-END
-ELSE
-    PRINT N'★ 17) FgL.usp_GetLabelDataByBatchNo already exists';
-GO
-
-/*---------------------------------------------------------------------------  
-  18) String-Mapping Tables & PROC  
----------------------------------------------------------------------------*/
-PRINT N'★ 18) Creating string-mapping objects';
-
-/*---------------------------------------------------------------------------  
-  0) DROP ตารางและ procedure เดิมออกก่อน
----------------------------------------------------------------------------*/
-IF OBJECT_ID('FgL.UpdateTemplateMappingWithStringKeys', 'P') IS NOT NULL
-    DROP PROCEDURE FgL.UpdateTemplateMappingWithStringKeys;
-PRINT N'✓ ลบ Procedure FgL.UpdateTemplateMappingWithStringKeys';
-
-IF OBJECT_ID('FgL.GetTemplateByProductAndCustomerKeys', 'P') IS NOT NULL
-    DROP PROCEDURE FgL.GetTemplateByProductAndCustomerKeys;
-PRINT N'✓ ลบ Procedure FgL.GetTemplateByProductAndCustomerKeys';
-
-IF OBJECT_ID('FgL.TemplateMappingProductCustomerString', 'U') IS NOT NULL
-BEGIN
-    DROP TABLE FgL.TemplateMappingProductCustomerString;
-    PRINT N'✓ ลบตาราง FgL.TemplateMappingProductCustomerString';
-END
-
-IF OBJECT_ID('FgL.TemplateMappingCustomerString', 'U') IS NOT NULL
-BEGIN
-    DROP TABLE FgL.TemplateMappingCustomerString;
-    PRINT N'✓ ลบตาราง FgL.TemplateMappingCustomerString';
-END
-
-IF OBJECT_ID('FgL.TemplateMappingProductString', 'U') IS NOT NULL
-BEGIN
-    DROP TABLE FgL.TemplateMappingProductString;
-    PRINT N'✓ ลบตาราง FgL.TemplateMappingProductString';
-END
-GO
-
-/*---------------------------------------------------------------------------  
-  1) สร้างตาราง mapping สำหรับ ProductKey ที่เป็น string
----------------------------------------------------------------------------*/
-IF OBJECT_ID('FgL.TemplateMappingProductString','U') IS NULL
-BEGIN
-CREATE TABLE FgL.TemplateMappingProductString (
-    ID INT IDENTITY(1,1) PRIMARY KEY,
-    TemplateID INT NOT NULL,
-    ProductKeyString NVARCHAR(50) NOT NULL,
-    Active BIT NOT NULL DEFAULT 1,
-    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
-    CONSTRAINT FK_TMPS_Template FOREIGN KEY (TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
-);
-
-CREATE INDEX IX_TemplateMappingProductString_ProductKey ON FgL.TemplateMappingProductString(ProductKeyString);
-CREATE INDEX IX_TemplateMappingProductString_Active ON FgL.TemplateMappingProductString(Active);
-CREATE INDEX IX_TemplateMappingProductString_TemplateID ON FgL.TemplateMappingProductString(TemplateID);
-
-PRINT N'✓ ตาราง FgL.TemplateMappingProductString สร้างเรียบร้อยแล้ว';
-END
-ELSE
-    PRINT N'✓ ตาราง FgL.TemplateMappingProductString มีอยู่แล้ว';
-GO
-
-/*---------------------------------------------------------------------------  
-  2) สร้างตาราง mapping สำหรับ CustomerKey ที่เป็น string
----------------------------------------------------------------------------*/
-IF OBJECT_ID('FgL.TemplateMappingCustomerString','U') IS NULL
-BEGIN
-CREATE TABLE FgL.TemplateMappingCustomerString (
-    ID INT IDENTITY(1,1) PRIMARY KEY,
-    TemplateID INT NOT NULL,
-    CustomerKeyString NVARCHAR(50) NOT NULL,
-    Active BIT NOT NULL DEFAULT 1,
-    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
-    CONSTRAINT FK_TMCS_Template FOREIGN KEY (TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
-);
-
-CREATE INDEX IX_TemplateMappingCustomerString_CustomerKey ON FgL.TemplateMappingCustomerString(CustomerKeyString);
-CREATE INDEX IX_TemplateMappingCustomerString_Active ON FgL.TemplateMappingCustomerString(Active);
-CREATE INDEX IX_TemplateMappingCustomerString_TemplateID ON FgL.TemplateMappingCustomerString(TemplateID);
-
-PRINT N'✓ ตาราง FgL.TemplateMappingCustomerString สร้างเรียบร้อยแล้ว';
-END
-ELSE
-    PRINT N'✓ ตาราง FgL.TemplateMappingCustomerString มีอยู่แล้ว';
-GO
-
-/*---------------------------------------------------------------------------  
-  3) สร้างตาราง mapping สำหรับคู่ ProductKey และ CustomerKey ที่เป็น string
----------------------------------------------------------------------------*/
-IF OBJECT_ID('FgL.TemplateMappingProductCustomerString','U') IS NULL
-BEGIN
-CREATE TABLE FgL.TemplateMappingProductCustomerString (
-    ID INT IDENTITY(1,1) PRIMARY KEY,
-    TemplateID INT NOT NULL,
-    ProductKeyString NVARCHAR(50) NOT NULL,
-    CustomerKeyString NVARCHAR(50) NOT NULL,
-    Active BIT NOT NULL DEFAULT 1,
-    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
-    CONSTRAINT FK_TMPCS_Template FOREIGN KEY (TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
-);
-
-CREATE INDEX IX_TemplateMappingProductCustomerString_ProductKey ON FgL.TemplateMappingProductCustomerString(ProductKeyString);
-CREATE INDEX IX_TemplateMappingProductCustomerString_CustomerKey ON FgL.TemplateMappingProductCustomerString(CustomerKeyString);
-CREATE INDEX IX_TemplateMappingProductCustomerString_Active ON FgL.TemplateMappingProductCustomerString(Active);
-CREATE INDEX IX_TemplateMappingProductCustomerString_TemplateID ON FgL.TemplateMappingProductCustomerString(TemplateID);
-
-PRINT N'✓ ตาราง FgL.TemplateMappingProductCustomerString สร้างเรียบร้อยแล้ว';
-END
-ELSE
-    PRINT N'✓ ตาราง FgL.TemplateMappingProductCustomerString มีอยู่แล้ว';
-GO
-
-/*---------------------------------------------------------------------------  
-  4) สร้าง Stored Procedure สำหรับค้นหา template ด้วย ProductKey และ CustomerKey ที่เป็น string
----------------------------------------------------------------------------*/
-SET ANSI_NULLS ON;
-SET QUOTED_IDENTIFIER ON;
-GO
-
-IF OBJECT_ID('FgL.GetTemplateByProductAndCustomerKeys','P') IS NOT NULL
-BEGIN
-    DROP PROCEDURE FgL.GetTemplateByProductAndCustomerKeys;
-    PRINT N'✓ ลบ Procedure FgL.GetTemplateByProductAndCustomerKeys เพื่อสร้างใหม่';
-END
-GO
-
-IF OBJECT_ID('FgL.GetTemplateByProductAndCustomerKeys','P') IS NULL
-BEGIN
-    EXEC('CREATE PROCEDURE FgL.GetTemplateByProductAndCustomerKeys
-    @productKey NVARCHAR(200),
-    @customerKey NVARCHAR(200) = NULL,
-    @templateType NVARCHAR(50) = ''Standard''
-AS
-BEGIN
-    SET NOCOUNT ON;
-    
-    DECLARE @TemplateID INT = NULL;
-    
-    -- ถ้ามีทั้ง productKey และ customerKey ลองหา template จากทั้งคู่ก่อน
-    IF @productKey IS NOT NULL AND @customerKey IS NOT NULL
-    BEGIN
-        -- ลองหาจาก exact match ทั้ง product และ customer ก่อน
-        -- และตรวจสอบ TemplateType ด้วย
-        SELECT TOP 1 @TemplateID = T.TemplateID
-        FROM FgL.LabelTemplate T
-        WHERE T.ProductKey = @productKey
-          AND T.CustomerKey = @customerKey
-          AND (T.TemplateType = @templateType OR @templateType IS NULL)
-          AND T.Active = 1
-        ORDER BY T.CreatedAt DESC;
-        
-        -- ถ้าไม่พบ แสดงว่าจะลองค้นหาจากตารางแมปปิ้งที่เป็นแบบ String match
-        IF @TemplateID IS NULL
-        BEGIN
-            SELECT TOP 1 @TemplateID = M.TemplateID
-            FROM FgL.TemplateMappingProductCustomerString M
-            INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
-            WHERE @productKey LIKE M.ProductKeyString
-              AND @customerKey LIKE M.CustomerKeyString
-              AND (T.TemplateType = @templateType OR @templateType IS NULL)
-              AND M.Active = 1
-              AND T.Active = 1
-            ORDER BY M.CreatedAt DESC;
-        END;
-    END;
-    
-    -- ถ้ายังไม่พบและมี productKey ให้ลองค้นหาแค่จาก productKey
-    IF @TemplateID IS NULL AND @productKey IS NOT NULL
-    BEGIN
-        -- ลองหาจาก exact match แค่ productKey
-        SELECT TOP 1 @TemplateID = T.TemplateID
-        FROM FgL.LabelTemplate T
-        WHERE T.ProductKey = @productKey
-          AND (T.CustomerKey IS NULL OR T.CustomerKey = '''')
-          AND (T.TemplateType = @templateType OR @templateType IS NULL)
-          AND T.Active = 1
-        ORDER BY T.CreatedAt DESC;
-        
-        -- ถ้าไม่พบ ลองค้นหาจาก string match
-        IF @TemplateID IS NULL
-        BEGIN
-            SELECT TOP 1 @TemplateID = M.TemplateID
-            FROM FgL.TemplateMappingProductString M
-            INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
-            WHERE @productKey LIKE M.ProductKeyString
-              AND (T.TemplateType = @templateType OR @templateType IS NULL)
-              AND M.Active = 1
-              AND T.Active = 1
-            ORDER BY M.CreatedAt DESC;
-        END;
-    END;
-    
-    -- ถ้ายังไม่พบและมี customerKey ให้ลองค้นหาแค่จาก customerKey
-    IF @TemplateID IS NULL AND @customerKey IS NOT NULL
-    BEGIN
-        -- ลองหาจาก exact match แค่ customerKey
-        SELECT TOP 1 @TemplateID = T.TemplateID
-        FROM FgL.LabelTemplate T
-        WHERE (T.ProductKey IS NULL OR T.ProductKey = '''')
-          AND T.CustomerKey = @customerKey
-          AND (T.TemplateType = @templateType OR @templateType IS NULL)
-          AND T.Active = 1
-        ORDER BY T.CreatedAt DESC;
-        
-        -- ถ้าไม่พบ ลองค้นหาจาก string match
-        IF @TemplateID IS NULL
-        BEGIN
-            SELECT TOP 1 @TemplateID = M.TemplateID
-            FROM FgL.TemplateMappingCustomerString M
-            INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
-            WHERE @customerKey LIKE M.CustomerKeyString
-              AND (T.TemplateType = @templateType OR @templateType IS NULL)
-              AND M.Active = 1
-              AND T.Active = 1
-            ORDER BY M.CreatedAt DESC;
-        END;
-    END;
-    
-    -- ส่งค่า TemplateID กลับไป
-    SELECT @TemplateID AS TemplateID;
-END;');
-    PRINT N'✓ Stored Procedure FgL.GetTemplateByProductAndCustomerKeys สร้างเรียบร้อยแล้ว';
-END
-ELSE
-    PRINT N'✓ Stored Procedure FgL.GetTemplateByProductAndCustomerKeys มีอยู่แล้ว';
-GO
-
-/*---------------------------------------------------------------------------  
-  5) สร้าง Stored Procedure สำหรับอัพเดต mapping ระหว่าง template กับ ProductKey และ CustomerKey ที่เป็น string
----------------------------------------------------------------------------*/
-SET ANSI_NULLS ON;
-SET QUOTED_IDENTIFIER ON;
-GO
-
-IF OBJECT_ID('FgL.UpdateTemplateMappingWithStringKeys','P') IS NULL
-BEGIN
-    EXEC('CREATE PROCEDURE FgL.UpdateTemplateMappingWithStringKeys
-    @TemplateID INT,
-    @ProductKey NVARCHAR(50) = NULL,
-    @CustomerKey NVARCHAR(50) = NULL
-AS
-BEGIN
-    SET NOCOUNT ON;
-    
-    -- ลบ mapping เก่าของ template นี้ (ทำเป็น inactive)
-    UPDATE FgL.TemplateMappingProductString
-    SET Active = 0
-    WHERE TemplateID = @TemplateID;
-    
-    UPDATE FgL.TemplateMappingCustomerString
-    SET Active = 0
-    WHERE TemplateID = @TemplateID;
-    
-    UPDATE FgL.TemplateMappingProductCustomerString
-    SET Active = 0
-    WHERE TemplateID = @TemplateID;
-    
-    -- ถ้ามีทั้ง ProductKey และ CustomerKey ทำให้ templates อื่นที่มี ProductKey+CustomerKey เดียวกันเป็น inactive
-        IF @ProductKey IS NOT NULL AND @ProductKey <> '''' AND @ProductKey <> ''system'' AND 
-           @CustomerKey IS NOT NULL AND @CustomerKey <> '''' AND @CustomerKey <> ''system''
-    BEGIN
-        -- 1. หา templates ทั้งหมดที่มี ProductKey+CustomerKey เดียวกัน
-        DECLARE @OtherTemplateIds TABLE (TemplateID INT);
-        
-        -- จากตาราง TemplateMappingProductCustomerString
-        INSERT INTO @OtherTemplateIds (TemplateID)
-        SELECT DISTINCT TemplateID 
-        FROM FgL.TemplateMappingProductCustomerString
-        WHERE ProductKeyString = @ProductKey
-          AND CustomerKeyString = @CustomerKey
-          AND Active = 1
-          AND TemplateID <> @TemplateID;
-        
-        -- จากตาราง LabelTemplate
-        INSERT INTO @OtherTemplateIds (TemplateID)
-        SELECT DISTINCT TemplateID
-        FROM FgL.LabelTemplate
-        WHERE ProductKey = @ProductKey
-          AND CustomerKey = @CustomerKey
-          AND Active = 1
-          AND TemplateID <> @TemplateID
-          AND TemplateID NOT IN (SELECT TemplateID FROM @OtherTemplateIds);
-        
-        -- 2. ทำให้ templates เหล่านี้ inactive
-        -- ในตาราง mapping
-        UPDATE FgL.TemplateMappingProductString
-        SET Active = 0
-        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
-        
-        UPDATE FgL.TemplateMappingCustomerString
-        SET Active = 0
-        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
-        
-        UPDATE FgL.TemplateMappingProductCustomerString
-        SET Active = 0
-        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
-        
-        -- ในตาราง LabelTemplate
-        UPDATE FgL.LabelTemplate
-        SET Active = 0
-        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
-    END
-    
-    -- ถ้ามีแค่ ProductKey ทำให้ templates อื่นที่มีแค่ ProductKey เดียวกันเป็น inactive
-        ELSE IF @ProductKey IS NOT NULL AND @ProductKey <> '''' AND @ProductKey <> ''system''
-    BEGIN
-        -- 1. หา templates ทั้งหมดที่มี ProductKey เดียวกัน (และไม่มี CustomerKey)
-        DECLARE @OtherProductTemplateIds TABLE (TemplateID INT);
-        
-        -- จากตาราง TemplateMappingProductString
-        INSERT INTO @OtherProductTemplateIds (TemplateID)
-        SELECT DISTINCT tmps.TemplateID 
-        FROM FgL.TemplateMappingProductString tmps
-        LEFT JOIN FgL.TemplateMappingProductCustomerString tmpcs
-            ON tmps.TemplateID = tmpcs.TemplateID AND tmpcs.Active = 1
-        WHERE tmps.ProductKeyString = @ProductKey
-          AND tmps.Active = 1
-          AND tmps.TemplateID <> @TemplateID
-          AND tmpcs.TemplateID IS NULL;  -- ไม่มี CustomerKey mapping
-        
-        -- จากตาราง LabelTemplate
-        INSERT INTO @OtherProductTemplateIds (TemplateID)
-        SELECT DISTINCT TemplateID
-        FROM FgL.LabelTemplate
-        WHERE ProductKey = @ProductKey
-              AND (CustomerKey IS NULL OR CustomerKey = '''' OR CustomerKey = ''system'')
-          AND Active = 1
-          AND TemplateID <> @TemplateID
-          AND TemplateID NOT IN (SELECT TemplateID FROM @OtherProductTemplateIds);
-        
-        -- 2. ทำให้ templates เหล่านี้ inactive
-        UPDATE FgL.TemplateMappingProductString
-        SET Active = 0
-        WHERE TemplateID IN (SELECT TemplateID FROM @OtherProductTemplateIds);
-        
-        UPDATE FgL.LabelTemplate
-        SET Active = 0
-        WHERE TemplateID IN (SELECT TemplateID FROM @OtherProductTemplateIds);
-    END
-    
-    -- เพิ่ม mapping ใหม่
-        IF @ProductKey IS NOT NULL AND @ProductKey <> '''' AND @ProductKey <> ''system''
-    BEGIN
-        -- เพิ่ม mapping สำหรับ ProductKey
-        INSERT INTO FgL.TemplateMappingProductString (TemplateID, ProductKeyString)
-        VALUES (@TemplateID, @ProductKey);
-        
-        -- ถ้ามี CustomerKey ด้วย เพิ่ม mapping สำหรับคู่ ProductKey และ CustomerKey
-            IF @CustomerKey IS NOT NULL AND @CustomerKey <> '''' AND @CustomerKey <> ''system''
-        BEGIN
-            INSERT INTO FgL.TemplateMappingProductCustomerString (TemplateID, ProductKeyString, CustomerKeyString)
-            VALUES (@TemplateID, @ProductKey, @CustomerKey);
-        END
-    END
-    
-    -- ถ้ามีแค่ CustomerKey เพิ่ม mapping สำหรับ CustomerKey
-        IF (@ProductKey IS NULL OR @ProductKey = '''' OR @ProductKey = ''system'')
-           AND @CustomerKey IS NOT NULL AND @CustomerKey <> '''' AND @CustomerKey <> ''system''
-    BEGIN
-        INSERT INTO FgL.TemplateMappingCustomerString (TemplateID, CustomerKeyString)
-        VALUES (@TemplateID, @CustomerKey);
-    END
-    
-    -- อัพเดตข้อมูลในตาราง LabelTemplate ด้วย
-    UPDATE FgL.LabelTemplate
-        SET ProductKey = CASE WHEN @ProductKey = ''system'' THEN NULL ELSE @ProductKey END,
-            CustomerKey = CASE WHEN @CustomerKey = ''system'' THEN NULL ELSE @CustomerKey END,
-        UpdatedAt = GETDATE(),
-        Active = 1
-    WHERE TemplateID = @TemplateID;
-    
-    -- คืนค่า TemplateID ที่อัพเดต
-    SELECT @TemplateID AS TemplateID;
-    END;');
-    PRINT N'✓ Stored Procedure FgL.UpdateTemplateMappingWithStringKeys สร้างเรียบร้อยแล้ว';
-END
-ELSE
-    PRINT N'✓ Stored Procedure FgL.UpdateTemplateMappingWithStringKeys มีอยู่แล้ว';
-GO
-
-/*---------------------------------------------------------------------------  
-  FINISHED  
----------------------------------------------------------------------------*/
-PRINT N'✅  FG-Label schema rev I9-keep installed successfully (data preserved)';
-GO 
-
-/*===============================================================
-  PATCH : เพิ่มคอลัมน์ BME_LABEL ให้ vw_Label_PrintSummary
-  DATE  : 23-May-2025
-===============================================================*/
-SET ANSI_NULLS ON;
-SET QUOTED_IDENTIFIER ON;
-GO
-
------------------------------------------------------------------
--- 1) ALTER VIEW
------------------------------------------------------------------
-CREATE OR ALTER VIEW FgL.vw_Label_PrintSummary
-AS
 /*--------------------------------------------------------------
-  STEP-1  KeyResolve : เหมือนเดิม
+  STEP-2  BatchCustomer : ข้อมูลลูกค้าและประเทศปลายทาง (1 ต่อ BatchNo)
 --------------------------------------------------------------*/
-WITH KeyResolve AS (
-    SELECT  PN.BatchNo,
-            ItemKeyResolved = COALESCE(NULLIF(PN.ItemKey,''), NULLIF(PB0.Assembly_Item_Key,'')),
-            CustKeyResolved = COALESCE(NULLIF(PN.CustKey,''), NULLIF(PB0.CustKey,'')) 
-    FROM    dbo.PNMAST PN
-    LEFT    JOIN dbo.PNBomInfo PB0 ON PB0.BatchNo = PN.BatchNo
+BatchCustomer AS (
+    -- หาข้อมูลจากตาราง BatchCustomerMapping เป็นหลัก
+    SELECT 
+        KR.BatchNo,
+        KR.ItemKeyResolved,
+        BCM.CustKey,
+        BCM.ShipToCountry
+    FROM KeyResolve KR
+    JOIN FgL.BatchCustomerMapping BCM ON BCM.BatchNo = KR.BatchNo 
+                                     AND BCM.Active = 1
+    
+    UNION
+    
+    -- ถ้าไม่มีข้อมูลในตาราง BatchCustomerMapping ใช้ค่าจาก PNMAST และ BME_LABEL
+    SELECT 
+        KR.BatchNo,
+        KR.ItemKeyResolved,
+        KR.CustKeyResolved,
+        (SELECT TOP 1 SHIPTO_COUNTRY 
+         FROM FgL.BME_LABEL 
+         WHERE ItemKey = KR.ItemKeyResolved AND CustKey = KR.CustKeyResolved) AS ShipToCountry
+    FROM KeyResolve KR
+    WHERE NOT EXISTS (
+        SELECT 1 FROM FgL.BatchCustomerMapping 
+        WHERE BatchNo = KR.BatchNo AND Active = 1
+    )
 ),
 /*--------------------------------------------------------------
-  STEP-2  BaseData  (เหมือน rev I9 แต่ไม่ SELECT list ที่นี่)
+  STEP-3  BaseData  (รวมข้อมูลจากทุกตาราง)
 --------------------------------------------------------------*/
 BaseData AS (
     SELECT
@@ -1081,16 +614,16 @@ BaseData AS (
         PN.SchStartDate,
         PN.ActStartDate            AS ProductionDate,
         PN.ActCompletionDate,
-        KR.ItemKeyResolved,
-        KR.CustKeyResolved,
+        BC.ItemKeyResolved,
+        BC.CustKey AS CustKeyResolved, -- ใช้ CustKey จาก BatchCustomer โดยตรง
 
         /*--------- BME_LABEL link ----------*/
-        BL.CustKey,
+        BC.CustKey,
         BL.ItemKey,
 
         /*  alias ที่ UI ใช้อยู่ */
         BL.[REMAINING_SHELF-LIFE],
-        BL.SHIPTO_COUNTRY           AS ShipToCountry,
+        BC.ShipToCountry,          -- ใช้ค่าจาก BatchCustomer
         BL.IMPORTED_BY,
 
         /*  field อื่น ๆ ที่มาจากตารางอื่น (คงไว้) */
@@ -1184,21 +717,24 @@ BaseData AS (
         BL.[NOTE IN CHINESE]
         /*=========== ▲ END: extra fields ▲ ===========*/
 
-    /*==== joins (เหมือนเดิม) ====*/
+    /*==== joins ตารางต่างๆ เข้าด้วยกัน ====*/
     FROM dbo.PNMAST PN
     INNER JOIN KeyResolve                    KR  ON KR.BatchNo = PN.BatchNo
-    LEFT  JOIN FgL.BME_LABEL                 BL  ON BL.ItemKey = KR.ItemKeyResolved
-    LEFT  JOIN dbo.INMAST                    IM  ON IM.ItemKey = KR.ItemKeyResolved
-    LEFT  JOIN dbo.ARCUST                    AR  ON AR.Customer_Key = KR.CustKeyResolved
+    INNER JOIN BatchCustomer                 BC  ON BC.BatchNo = PN.BatchNo
+    LEFT  JOIN FgL.BME_LABEL                 BL  ON BL.ItemKey = BC.ItemKeyResolved 
+                                               AND BL.CustKey = BC.CustKey
+    LEFT  JOIN dbo.INMAST                    IM  ON IM.ItemKey = BC.ItemKeyResolved
+    LEFT  JOIN dbo.ARCUST                    AR  ON AR.Customer_Key = BC.CustKey
     OUTER APPLY (
          SELECT TOP 1 *
          FROM   dbo.PNBomInfo p
          WHERE  p.BatchNo = PN.BatchNo
-         ORDER  BY CASE WHEN p.Assembly_Item_Key = KR.ItemKeyResolved THEN 0 ELSE 1 END, p.LineID
+         ORDER  BY CASE WHEN p.Assembly_Item_Key = BC.ItemKeyResolved THEN 0 ELSE 1 END, p.LineID
     )                                           PB
     LEFT  JOIN FgL.LabelTemplate               T  ON T.Active = 1
-                                                 AND T.ProductKey  = KR.ItemKeyResolved
-                                                 AND (T.CustomerKey = KR.CustKeyResolved OR T.CustomerKey IS NULL)
+                                                 AND T.ProductKey  = BC.ItemKeyResolved
+                                                 AND (T.CustomerKey = BC.CustKey OR T.CustomerKey IS NULL)
+                                                 AND (T.ShipToCountry = BC.ShipToCountry OR T.ShipToCountry IS NULL)
     CROSS APPLY (SELECT TotalWeightKG = COALESCE(NULLIF(PN.TotalFGWeightYielded,0),
                                                  NULLIF(PN.BatchWeight,0),0)) TW
     CROSS APPLY (
@@ -1221,14 +757,251 @@ SELECT *
 FROM   BaseData;
 GO
 
-PRINT N'★ vw_Label_PrintSummary updated – all BME_LABEL fields included';
+PRINT N'★ vw_Label_PrintSummary updated – standard 1 BatchNo = 1 CustKey';
+GO 
 
+/*---------------------------------------------------------------------------  
+  16) TVF  FgL.tvf_Label_PrintData (แก้ไขให้ตรงตามหลักการ 1 BatchNo = 1 ชุดข้อมูล)
+---------------------------------------------------------------------------*/
+PRINT N'★ 16) Creating TVF FgL.tvf_Label_PrintData (standard version)';
 
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
 
+CREATE OR ALTER FUNCTION FgL.tvf_Label_PrintData
+(
+    @BatchNo NVARCHAR(30),
+    @BagNo   NVARCHAR(10) = NULL
+)
+RETURNS TABLE
+AS RETURN
+(
+    SELECT  S.*,
+            BG.BagNo,
+            BG.BagSequence,
+            BG.BagPosition,
+            BG.TotalBags  AS BagNumbers_Total
+    FROM    FgL.vw_Label_PrintSummary S
+    CROSS   APPLY dbo.tvf_GetBagNumbersRange(S.BatchNo,1,S.TotalBags,S.TotalBags) BG
+    WHERE   S.BatchNo = @BatchNo
+      AND  (@BagNo IS NULL OR BG.BagNo = @BagNo)
+);
+GO
+PRINT N'★ 16) FgL.tvf_Label_PrintData created/updated';
+GO
+
+/*---------------------------------------------------------------------------  
+  17) PROC FgL.usp_GetLabelDataByBatchNo (แก้ไขให้ตรงตามหลักการ 1 BatchNo = 1 ชุดข้อมูล)
+---------------------------------------------------------------------------*/
+PRINT N'★ 17) Creating PROC FgL.usp_GetLabelDataByBatchNo (standard version)';
+
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+CREATE OR ALTER PROCEDURE FgL.usp_GetLabelDataByBatchNo
+    @BatchNo NVARCHAR(30),
+    @BagNo   NVARCHAR(10) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    /* ถ้าไม่ระบุ BagNo → ส่งสรุประดับ Batch */
+    IF @BagNo IS NULL
+    BEGIN
+        SELECT *, 1 AS LabelRowNo
+        FROM   FgL.vw_Label_PrintSummary
+        WHERE  BatchNo = @BatchNo
+        ORDER  BY ItemKey;
+        RETURN;
+    END
+
+    /* Bag-level */
+    SELECT *, ROW_NUMBER() OVER (ORDER BY BagSequence) AS LabelRowNo
+    FROM   FgL.tvf_Label_PrintData(@BatchNo, @BagNo)
+    ORDER  BY BagSequence;
+END;
+GO
+PRINT N'★ 17) FgL.usp_GetLabelDataByBatchNo created/updated';
+GO
+
+/*---------------------------------------------------------------------------  
+  18) PROC FgL.usp_UpdateBatchCustomerMapping - สำหรับการจัดการข้อมูลลูกค้าของ Batch
+---------------------------------------------------------------------------*/
+PRINT N'★ 18) Creating PROC FgL.usp_UpdateBatchCustomerMapping';
+
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+CREATE OR ALTER PROCEDURE FgL.usp_UpdateBatchCustomerMapping
+    @BatchNo NVARCHAR(30),
+    @ItemKey NVARCHAR(50),
+    @CustKey NVARCHAR(50),
+    @ShipToCountry NVARCHAR(255) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- ตรวจสอบว่ามีข้อมูล BatchNo นี้อยู่แล้วหรือไม่
+    DECLARE @MappingID INT = NULL;
+    
+    SELECT @MappingID = MappingID
+    FROM FgL.BatchCustomerMapping
+    WHERE BatchNo = @BatchNo;
+      
+    IF @MappingID IS NULL
+    BEGIN
+        -- ยังไม่มีข้อมูล ให้เพิ่มใหม่
+        INSERT INTO FgL.BatchCustomerMapping (BatchNo, ItemKey, CustKey, ShipToCountry)
+        VALUES (@BatchNo, @ItemKey, @CustKey, @ShipToCountry);
+        
+        SET @MappingID = SCOPE_IDENTITY();
+    END
+    ELSE
+    BEGIN
+        -- มีข้อมูลอยู่แล้ว ให้อัพเดท
+        UPDATE FgL.BatchCustomerMapping
+        SET ItemKey = @ItemKey,
+            CustKey = @CustKey,
+            ShipToCountry = @ShipToCountry,
+            Active = 1,
+            UpdatedAt = GETDATE()
+        WHERE MappingID = @MappingID;
+    END
+    
+    -- คืนค่าข้อมูลที่อัพเดท
+    SELECT *
+    FROM FgL.BatchCustomerMapping
+    WHERE MappingID = @MappingID;
+END;
+GO
+PRINT N'★ 18) FgL.usp_UpdateBatchCustomerMapping created';
+GO
+
+/*---------------------------------------------------------------------------  
+  19) String-Mapping Tables & PROC  
+---------------------------------------------------------------------------*/
+PRINT N'★ 19) Creating string-mapping objects';
+
+/*---------------------------------------------------------------------------  
+  0) DROP ตารางและ procedure เดิมออกก่อน
+---------------------------------------------------------------------------*/
+IF OBJECT_ID('FgL.UpdateTemplateMappingWithStringKeys', 'P') IS NOT NULL
+    DROP PROCEDURE FgL.UpdateTemplateMappingWithStringKeys;
+PRINT N'✓ ลบ Procedure FgL.UpdateTemplateMappingWithStringKeys';
+
+IF OBJECT_ID('FgL.GetTemplateByProductAndCustomerKeys', 'P') IS NOT NULL
+    DROP PROCEDURE FgL.GetTemplateByProductAndCustomerKeys;
+PRINT N'✓ ลบ Procedure FgL.GetTemplateByProductAndCustomerKeys';
+
+IF OBJECT_ID('FgL.TemplateMappingProductCustomerString', 'U') IS NOT NULL
+BEGIN
+    DROP TABLE FgL.TemplateMappingProductCustomerString;
+    PRINT N'✓ ลบตาราง FgL.TemplateMappingProductCustomerString';
+END
+
+IF OBJECT_ID('FgL.TemplateMappingCustomerString', 'U') IS NOT NULL
+BEGIN
+    DROP TABLE FgL.TemplateMappingCustomerString;
+    PRINT N'✓ ลบตาราง FgL.TemplateMappingCustomerString';
+END
+
+IF OBJECT_ID('FgL.TemplateMappingProductString', 'U') IS NOT NULL
+BEGIN
+    DROP TABLE FgL.TemplateMappingProductString;
+    PRINT N'✓ ลบตาราง FgL.TemplateMappingProductString';
+END
+GO
+
+/*---------------------------------------------------------------------------  
+  1) สร้างตาราง mapping สำหรับ ProductKey ที่เป็น string
+---------------------------------------------------------------------------*/
+IF OBJECT_ID('FgL.TemplateMappingProductString','U') IS NULL
+BEGIN
+CREATE TABLE FgL.TemplateMappingProductString (
+    ID INT IDENTITY(1,1) PRIMARY KEY,
+    TemplateID INT NOT NULL,
+    ProductKeyString NVARCHAR(50) NOT NULL,
+    Active BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT FK_TMPS_Template FOREIGN KEY (TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
+);
+
+CREATE INDEX IX_TemplateMappingProductString_ProductKey ON FgL.TemplateMappingProductString(ProductKeyString);
+CREATE INDEX IX_TemplateMappingProductString_Active ON FgL.TemplateMappingProductString(Active);
+CREATE INDEX IX_TemplateMappingProductString_TemplateID ON FgL.TemplateMappingProductString(TemplateID);
+
+PRINT N'✓ ตาราง FgL.TemplateMappingProductString สร้างเรียบร้อยแล้ว';
+END
+ELSE
+    PRINT N'✓ ตาราง FgL.TemplateMappingProductString มีอยู่แล้ว';
+GO
+
+/*---------------------------------------------------------------------------  
+  2) สร้างตาราง mapping สำหรับ CustomerKey ที่เป็น string
+---------------------------------------------------------------------------*/
+IF OBJECT_ID('FgL.TemplateMappingCustomerString','U') IS NULL
+BEGIN
+CREATE TABLE FgL.TemplateMappingCustomerString (
+    ID INT IDENTITY(1,1) PRIMARY KEY,
+    TemplateID INT NOT NULL,
+    CustomerKeyString NVARCHAR(50) NOT NULL,
+    Active BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT FK_TMCS_Template FOREIGN KEY (TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
+);
+
+CREATE INDEX IX_TemplateMappingCustomerString_CustomerKey ON FgL.TemplateMappingCustomerString(CustomerKeyString);
+CREATE INDEX IX_TemplateMappingCustomerString_Active ON FgL.TemplateMappingCustomerString(Active);
+CREATE INDEX IX_TemplateMappingCustomerString_TemplateID ON FgL.TemplateMappingCustomerString(TemplateID);
+
+PRINT N'✓ ตาราง FgL.TemplateMappingCustomerString สร้างเรียบร้อยแล้ว';
+END
+ELSE
+    PRINT N'✓ ตาราง FgL.TemplateMappingCustomerString มีอยู่แล้ว';
+GO 
+
+/*---------------------------------------------------------------------------  
+  3) สร้างตาราง mapping สำหรับคู่ ProductKey, CustomerKey และ ShipToCountry ที่เป็น string
+---------------------------------------------------------------------------*/
+IF OBJECT_ID('FgL.TemplateMappingProductCustomerString','U') IS NULL
+BEGIN
+CREATE TABLE FgL.TemplateMappingProductCustomerString (
+    ID INT IDENTITY(1,1) PRIMARY KEY,
+    TemplateID INT NOT NULL,
+    ProductKeyString NVARCHAR(50) NOT NULL,
+    CustomerKeyString NVARCHAR(50) NOT NULL,
+    ShipToCountryString NVARCHAR(255) NULL, -- เพิ่มคอลัมน์นี้
+    Active BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT FK_TMPCS_Template FOREIGN KEY (TemplateID) REFERENCES FgL.LabelTemplate(TemplateID)
+);
+
+CREATE INDEX IX_TemplateMappingProductCustomerString_ProductKey ON FgL.TemplateMappingProductCustomerString(ProductKeyString);
+CREATE INDEX IX_TemplateMappingProductCustomerString_CustomerKey ON FgL.TemplateMappingProductCustomerString(CustomerKeyString);
+CREATE INDEX IX_TemplateMappingProductCustomerString_ShipToCountry ON FgL.TemplateMappingProductCustomerString(ShipToCountryString);
+CREATE INDEX IX_TemplateMappingProductCustomerString_Active ON FgL.TemplateMappingProductCustomerString(Active);
+CREATE INDEX IX_TemplateMappingProductCustomerString_TemplateID ON FgL.TemplateMappingProductCustomerString(TemplateID);
+
+PRINT N'✓ ตาราง FgL.TemplateMappingProductCustomerString สร้างเรียบร้อยแล้ว';
+END
+ELSE
+    PRINT N'✓ ตาราง FgL.TemplateMappingProductCustomerString มีอยู่แล้ว';
+GO
+
+/*---------------------------------------------------------------------------  
+  4) สร้าง Stored Procedure สำหรับค้นหา template ด้วย ProductKey, CustomerKey และ ShipToCountry
+---------------------------------------------------------------------------*/
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
 
 CREATE OR ALTER PROCEDURE FgL.GetTemplateByProductAndCustomerKeys
     @productKey NVARCHAR(200),
     @customerKey NVARCHAR(200) = NULL,
+    @shipToCountry NVARCHAR(255) = NULL,
     @templateType NVARCHAR(50) = 'Standard'
 AS
 BEGIN
@@ -1236,14 +1009,34 @@ BEGIN
     
     DECLARE @TemplateID INT = NULL;
     
-    -- ค้นหาจาก exact match ทั้ง product และ customer key และตรวจสอบ TemplateType ด้วย
-    IF @productKey IS NOT NULL AND @customerKey IS NOT NULL
+    -- ล็อก input parameters เพื่อช่วยในการดีบัก
+    PRINT 'DEBUG FgL.GetTemplateByProductAndCustomerKeys: ProductKey=' + ISNULL(@productKey, 'NULL') + 
+          ', CustomerKey=' + ISNULL(@customerKey, 'NULL') + 
+          ', ShipToCountry=' + ISNULL(@shipToCountry, 'NULL') + 
+          ', TemplateType=' + ISNULL(@templateType, 'NULL');
+    
+    -- ลำดับความสำคัญในการค้นหา Template:
+    -- 1. ค้นหาจาก ProductKey + CustomerKey + ShipToCountry (ตรงทั้งหมด)
+    -- 2. ค้นหาจาก ProductKey + CustomerKey (ไม่สนใจ ShipToCountry)
+    -- 3. ค้นหาจาก ProductKey อย่างเดียว
+    -- 4. ค้นหาจาก CustomerKey อย่างเดียว
+
+    -- ตรวจสอบค่า TemplateType ที่ระบุ
+    IF @templateType IS NULL 
+        SET @templateType = 'Standard';
+        
+    PRINT 'DEBUG FgL.GetTemplateByProductAndCustomerKeys: Using TemplateType=' + @templateType;
+
+    -- 1. ค้นหาจาก ProductKey + CustomerKey + ShipToCountry
+    IF @productKey IS NOT NULL AND @customerKey IS NOT NULL AND @shipToCountry IS NOT NULL
     BEGIN
+        -- ค้นหาจาก exact match
         SELECT TOP 1 @TemplateID = T.TemplateID
         FROM FgL.LabelTemplate T
         WHERE T.ProductKey = @productKey
           AND T.CustomerKey = @customerKey
-          AND (T.TemplateType = @templateType OR @templateType IS NULL)
+          AND T.ShipToCountry = @shipToCountry
+          AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
           AND T.Active = 1
         ORDER BY T.CreatedAt DESC;
         
@@ -1255,13 +1048,296 @@ BEGIN
             INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
             WHERE @productKey LIKE M.ProductKeyString
               AND @customerKey LIKE M.CustomerKeyString
-              AND (T.TemplateType = @templateType OR @templateType IS NULL)
+              AND (@shipToCountry LIKE M.ShipToCountryString OR M.ShipToCountryString IS NULL)
+              AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
+              AND M.Active = 1
+              AND T.Active = 1
+            ORDER BY 
+                CASE WHEN M.ShipToCountryString IS NOT NULL THEN 1 ELSE 2 END, -- เรียงตาม ShipToCountry ที่มีค่าก่อน
+                M.CreatedAt DESC;
+        END;
+    END;
+    
+    -- 2. ค้นหาจาก ProductKey + CustomerKey
+    IF @TemplateID IS NULL AND @productKey IS NOT NULL AND @customerKey IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @TemplateID = T.TemplateID
+        FROM FgL.LabelTemplate T
+        WHERE T.ProductKey = @productKey
+          AND T.CustomerKey = @customerKey
+          AND (T.ShipToCountry IS NULL)
+          AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
+          AND T.Active = 1
+        ORDER BY T.CreatedAt DESC;
+        
+        -- ถ้าไม่พบ ลองค้นหาจากตารางแมปปิ้ง
+        IF @TemplateID IS NULL
+        BEGIN
+            SELECT TOP 1 @TemplateID = M.TemplateID
+            FROM FgL.TemplateMappingProductCustomerString M
+            INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
+            WHERE @productKey LIKE M.ProductKeyString
+              AND @customerKey LIKE M.CustomerKeyString
+              AND M.ShipToCountryString IS NULL
+              AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
               AND M.Active = 1
               AND T.Active = 1
             ORDER BY M.CreatedAt DESC;
         END;
     END;
     
-    -- คืนค่า TemplateID
+    -- 3. ค้นหาจาก ProductKey อย่างเดียว
+    IF @TemplateID IS NULL AND @productKey IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @TemplateID = T.TemplateID
+        FROM FgL.LabelTemplate T
+        WHERE T.ProductKey = @productKey
+          AND (T.CustomerKey IS NULL OR T.CustomerKey = '')
+          AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
+          AND T.Active = 1
+        ORDER BY T.CreatedAt DESC;
+        
+        -- ถ้าไม่พบ ลองค้นหาจากตารางแมปปิ้ง
+        IF @TemplateID IS NULL
+        BEGIN
+            SELECT TOP 1 @TemplateID = M.TemplateID
+            FROM FgL.TemplateMappingProductString M
+            INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
+            WHERE @productKey LIKE M.ProductKeyString
+              AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
+              AND M.Active = 1
+              AND T.Active = 1
+            ORDER BY M.CreatedAt DESC;
+        END;
+    END;
+    
+    -- 4. ค้นหาจาก CustomerKey อย่างเดียว
+    IF @TemplateID IS NULL AND @customerKey IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @TemplateID = T.TemplateID
+        FROM FgL.LabelTemplate T
+        WHERE (T.ProductKey IS NULL OR T.ProductKey = '')
+          AND T.CustomerKey = @customerKey
+          AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
+          AND T.Active = 1
+        ORDER BY T.CreatedAt DESC;
+        
+        -- ถ้าไม่พบ ลองค้นหาจากตารางแมปปิ้ง
+        IF @TemplateID IS NULL
+        BEGIN
+            SELECT TOP 1 @TemplateID = M.TemplateID
+            FROM FgL.TemplateMappingCustomerString M
+            INNER JOIN FgL.LabelTemplate T ON M.TemplateID = T.TemplateID
+            WHERE @customerKey LIKE M.CustomerKeyString
+              AND (T.TemplateType = @templateType OR T.TemplateType IS NULL)
+              AND M.Active = 1
+              AND T.Active = 1
+            ORDER BY M.CreatedAt DESC;
+        END;
+    END;
+    
+    -- ล็อกผลลัพธ์
+    IF @TemplateID IS NULL
+        PRINT 'DEBUG FgL.GetTemplateByProductAndCustomerKeys: No template found';
+    ELSE
+        PRINT 'DEBUG FgL.GetTemplateByProductAndCustomerKeys: Found TemplateID=' + CAST(@TemplateID AS NVARCHAR(20));
+        
+    -- ส่งค่า TemplateID กลับไป
     SELECT @TemplateID AS TemplateID;
 END;
+GO
+PRINT N'✓ Stored Procedure FgL.GetTemplateByProductAndCustomerKeys สร้างเรียบร้อยแล้ว';
+GO
+
+/*---------------------------------------------------------------------------  
+  5) สร้าง Stored Procedure สำหรับอัพเดต mapping ระหว่าง template กับ key ต่างๆ
+---------------------------------------------------------------------------*/
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+CREATE OR ALTER PROCEDURE FgL.UpdateTemplateMappingWithStringKeys
+    @TemplateID INT,
+    @ProductKey NVARCHAR(50) = NULL,
+    @CustomerKey NVARCHAR(50) = NULL,
+    @ShipToCountry NVARCHAR(255) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- ลบ mapping เก่าของ template นี้ (ทำเป็น inactive)
+    UPDATE FgL.TemplateMappingProductString
+    SET Active = 0
+    WHERE TemplateID = @TemplateID;
+    
+    UPDATE FgL.TemplateMappingCustomerString
+    SET Active = 0
+    WHERE TemplateID = @TemplateID;
+    
+    UPDATE FgL.TemplateMappingProductCustomerString
+    SET Active = 0
+    WHERE TemplateID = @TemplateID;
+    
+    -- ถ้ามีทั้ง ProductKey และ CustomerKey ทำให้ templates อื่นที่มี ProductKey+CustomerKey+ShipToCountry เดียวกันเป็น inactive
+    IF @ProductKey IS NOT NULL AND @ProductKey <> '' AND @ProductKey <> 'system' AND 
+       @CustomerKey IS NOT NULL AND @CustomerKey <> '' AND @CustomerKey <> 'system'
+    BEGIN
+        -- 1. หา templates ทั้งหมดที่มี ProductKey+CustomerKey+ShipToCountry เดียวกัน
+        DECLARE @OtherTemplateIds TABLE (TemplateID INT);
+        
+        -- จากตาราง TemplateMappingProductCustomerString
+        INSERT INTO @OtherTemplateIds (TemplateID)
+        SELECT DISTINCT TemplateID 
+        FROM FgL.TemplateMappingProductCustomerString
+        WHERE ProductKeyString = @ProductKey
+          AND CustomerKeyString = @CustomerKey
+          AND (ShipToCountryString = @ShipToCountry OR (@ShipToCountry IS NULL AND ShipToCountryString IS NULL))
+          AND Active = 1
+          AND TemplateID <> @TemplateID;
+        
+        -- จากตาราง LabelTemplate
+        INSERT INTO @OtherTemplateIds (TemplateID)
+        SELECT DISTINCT TemplateID
+        FROM FgL.LabelTemplate
+        WHERE ProductKey = @ProductKey
+          AND CustomerKey = @CustomerKey
+          AND (ShipToCountry = @ShipToCountry OR (@ShipToCountry IS NULL AND ShipToCountry IS NULL))
+          AND Active = 1
+          AND TemplateID <> @TemplateID
+          AND TemplateID NOT IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        -- 2. ทำให้ templates เหล่านี้ inactive
+        -- ในตาราง mapping
+        UPDATE FgL.TemplateMappingProductString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        UPDATE FgL.TemplateMappingCustomerString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        UPDATE FgL.TemplateMappingProductCustomerString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+        
+        -- ในตาราง LabelTemplate
+        UPDATE FgL.LabelTemplate
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherTemplateIds);
+    END
+    
+    -- ถ้ามีแค่ ProductKey ทำให้ templates อื่นที่มีแค่ ProductKey เดียวกันเป็น inactive
+    ELSE IF @ProductKey IS NOT NULL AND @ProductKey <> '' AND @ProductKey <> 'system'
+    BEGIN
+        -- 1. หา templates ทั้งหมดที่มี ProductKey เดียวกัน (และไม่มี CustomerKey)
+        DECLARE @OtherProductTemplateIds TABLE (TemplateID INT);
+        
+        -- จากตาราง TemplateMappingProductString
+        INSERT INTO @OtherProductTemplateIds (TemplateID)
+        SELECT DISTINCT tmps.TemplateID 
+        FROM FgL.TemplateMappingProductString tmps
+        LEFT JOIN FgL.TemplateMappingProductCustomerString tmpcs
+            ON tmps.TemplateID = tmpcs.TemplateID AND tmpcs.Active = 1
+        WHERE tmps.ProductKeyString = @ProductKey
+          AND tmps.Active = 1
+          AND tmps.TemplateID <> @TemplateID
+          AND tmpcs.TemplateID IS NULL;  -- ไม่มี CustomerKey mapping
+        
+        -- จากตาราง LabelTemplate
+        INSERT INTO @OtherProductTemplateIds (TemplateID)
+        SELECT DISTINCT TemplateID
+        FROM FgL.LabelTemplate
+        WHERE ProductKey = @ProductKey
+          AND (CustomerKey IS NULL OR CustomerKey = '' OR CustomerKey = 'system')
+          AND Active = 1
+          AND TemplateID <> @TemplateID
+          AND TemplateID NOT IN (SELECT TemplateID FROM @OtherProductTemplateIds);
+        
+        -- 2. ทำให้ templates เหล่านี้ inactive
+        UPDATE FgL.TemplateMappingProductString
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherProductTemplateIds);
+        
+        UPDATE FgL.LabelTemplate
+        SET Active = 0
+        WHERE TemplateID IN (SELECT TemplateID FROM @OtherProductTemplateIds);
+    END
+    
+    -- เพิ่ม mapping ใหม่
+    IF @ProductKey IS NOT NULL AND @ProductKey <> '' AND @ProductKey <> 'system'
+    BEGIN
+        -- เพิ่ม mapping สำหรับ ProductKey
+        INSERT INTO FgL.TemplateMappingProductString (TemplateID, ProductKeyString)
+        VALUES (@TemplateID, @ProductKey);
+        
+        -- ถ้ามี CustomerKey ด้วย เพิ่ม mapping สำหรับคู่ ProductKey, CustomerKey และ ShipToCountry
+        IF @CustomerKey IS NOT NULL AND @CustomerKey <> '' AND @CustomerKey <> 'system'
+        BEGIN
+            INSERT INTO FgL.TemplateMappingProductCustomerString 
+                (TemplateID, ProductKeyString, CustomerKeyString, ShipToCountryString)
+            VALUES (@TemplateID, @ProductKey, @CustomerKey, @ShipToCountry);
+        END
+    END
+    
+    -- ถ้ามีแค่ CustomerKey เพิ่ม mapping สำหรับ CustomerKey
+    IF (@ProductKey IS NULL OR @ProductKey = '' OR @ProductKey = 'system')
+       AND @CustomerKey IS NOT NULL AND @CustomerKey <> '' AND @CustomerKey <> 'system'
+    BEGIN
+        INSERT INTO FgL.TemplateMappingCustomerString (TemplateID, CustomerKeyString)
+        VALUES (@TemplateID, @CustomerKey);
+    END
+    
+    -- อัพเดตข้อมูลในตาราง LabelTemplate ด้วย
+    UPDATE FgL.LabelTemplate
+    SET ProductKey = CASE WHEN @ProductKey = 'system' THEN NULL ELSE @ProductKey END,
+        CustomerKey = CASE WHEN @CustomerKey = 'system' THEN NULL ELSE @CustomerKey END,
+        ShipToCountry = @ShipToCountry,
+        UpdatedAt = GETDATE(),
+        Active = 1
+    WHERE TemplateID = @TemplateID;
+    
+    -- คืนค่า TemplateID ที่อัพเดต
+    SELECT @TemplateID AS TemplateID;
+END;
+GO
+PRINT N'✓ Stored Procedure FgL.UpdateTemplateMappingWithStringKeys สร้างเรียบร้อยแล้ว';
+GO
+
+/*---------------------------------------------------------------------------  
+  IMPORT DATA TO BatchCustomerMapping
+---------------------------------------------------------------------------*/
+PRINT N'★ 19) นำเข้าข้อมูลเริ่มต้นไปยังตาราง FgL.BatchCustomerMapping';
+
+-- ตรวจสอบว่ามีข้อมูลในตารางหรือไม่
+IF NOT EXISTS (SELECT TOP 1 1 FROM FgL.BatchCustomerMapping)
+BEGIN
+    BEGIN TRY
+        INSERT INTO FgL.BatchCustomerMapping (BatchNo, ItemKey, CustKey, ShipToCountry)
+        SELECT DISTINCT 
+            BatchNo, 
+            ItemKeyResolved AS ItemKey, 
+            CustKeyResolved AS CustKey,
+            ShipToCountry
+        FROM FgL.vw_Label_PrintSummary
+        WHERE BatchNo IS NOT NULL 
+          AND ItemKeyResolved IS NOT NULL 
+          AND CustKeyResolved IS NOT NULL
+          -- กรณีที่มีหลายรายการต่อ BatchNo ให้เลือกเพียงรายการแรกเท่านั้น
+          AND BatchNo NOT IN (
+            SELECT BatchNo FROM FgL.BatchCustomerMapping
+          );
+        PRINT N'★ Data migrated to FgL.BatchCustomerMapping';
+    END TRY
+    BEGIN CATCH
+        PRINT N'★ No data migration to FgL.BatchCustomerMapping: ' + ERROR_MESSAGE();
+    END CATCH;
+END
+ELSE
+    PRINT N'★ FgL.BatchCustomerMapping already has data';
+GO
+
+/*---------------------------------------------------------------------------  
+  FINISHED  
+---------------------------------------------------------------------------*/
+PRINT N'✅  FG-Label schema rev J1-keep installed successfully (support for multiple CustKeys per BatchNo)';
+GO 

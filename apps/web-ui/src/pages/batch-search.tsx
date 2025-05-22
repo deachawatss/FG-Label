@@ -235,11 +235,12 @@ class ApiHelper {
   static async lookupTemplate(
     productKey: string,
     customerKey = '',
-    labelType: 'Standard' | 'Special' = 'Standard'
+    labelType: 'Standard' | 'Special' = 'Standard',
+    shipToCountry = ''
   ): Promise<any> {
     try {
       // สร้าง URL สำหรับค้นหา template
-      const apiUrl = `${ApiHelper.getApiBaseUrl()}/templates/lookup?productKey=${encodeURIComponent(productKey)}${customerKey ? `&customerKey=${encodeURIComponent(customerKey)}` : ''}&labelType=${labelType}`;
+      const apiUrl = `${ApiHelper.getApiBaseUrl()}/templates/lookup?productKey=${encodeURIComponent(productKey)}${customerKey ? `&customerKey=${encodeURIComponent(customerKey)}` : ''}&labelType=${labelType}${shipToCountry ? `&shipToCountry=${encodeURIComponent(shipToCountry)}` : ''}`;
       console.log(`Looking up template (${labelType}) by product and customer:`, apiUrl);
       
       const headers = ApiHelper.getAuthHeaders();
@@ -946,6 +947,7 @@ const BatchSearch: React.FC<{}> = () => {
   const [productionDate, setProductionDate] = useState<string | null>(null);
   const [selectedProductionDate, setSelectedProductionDate] = useState<string | null>(null);
   const [isResyncingPreview, setIsResyncingPreview] = useState<boolean>(false);
+  const [isSpecialLabel, setIsSpecialLabel] = useState<boolean>(false); // เพิ่ม state สำหรับตรวจสอบว่าเป็น Special Label หรือไม่
   
   // Refs
   const printFrameRef = useRef<HTMLIFrameElement>(null);
@@ -1117,9 +1119,20 @@ const BatchSearch: React.FC<{}> = () => {
         setBatches(processedData);
         console.log('Processed batches:', processedData);
         
-        // แสดง preview และเตรียมพิมพ์อัตโนมัติเมื่อพบข้อมูล
+        // ตรวจสอบและเลือก row ที่มี special template ก่อน
         if (processedData.length > 0) {
-          handleAutoPreviewAndPrint(processedData[0]);
+          // ค้นหา row ที่มี special template ที่ตรงกับ itemKey และ custKey
+          const rowWithSpecialTemplate = await findRowWithSpecialTemplate(processedData);
+          
+          // ถ้าพบ row ที่มี special template ให้แสดง preview และเตรียมพิมพ์
+          if (rowWithSpecialTemplate) {
+            console.log('Found row with special template:', rowWithSpecialTemplate);
+            handleAutoPreviewAndPrint(rowWithSpecialTemplate);
+          } else {
+            // ถ้าไม่พบ row ที่มี special template ให้ใช้ row แรก
+            console.log('No row with special template found, using first row');
+            handleAutoPreviewAndPrint(processedData[0]);
+          }
         }
       } else if (response.data) {
         // ถ้าข้อมูลไม่ใช่ array แต่เป็น object เดียว
@@ -1127,7 +1140,7 @@ const BatchSearch: React.FC<{}> = () => {
         setBatches(processedData);
         console.log('Processed single batch:', processedData);
         
-        // แสดง preview และเตรียมพิมพ์อัตโนมัติ
+        // มีเพียง row เดียว ให้แสดง preview และเตรียมพิมพ์อัตโนมัติ
         if (processedData.length > 0) {
           handleAutoPreviewAndPrint(processedData[0]);
         }
@@ -1163,6 +1176,54 @@ const BatchSearch: React.FC<{}> = () => {
       setBatches([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // เพิ่มฟังก์ชันสำหรับค้นหา row ที่มี special template
+  const findRowWithSpecialTemplate = async (batches: Batch[]): Promise<Batch | null> => {
+    try {
+      console.log('Finding row with special template...');
+      
+      // ค้นหา row ที่มีทั้ง itemKey และ custKey
+      const rowsWithItemKeyAndCustKey = batches.filter(batch => batch.itemKey && batch.custKey);
+      
+      // ตรวจสอบแต่ละ row ว่ามี special template หรือไม่
+      for (const batch of rowsWithItemKeyAndCustKey) {
+        console.log(`Checking if row with itemKey=${batch.itemKey}, custKey=${batch.custKey} has special template`);
+        
+        // ค้นหา special template
+        const template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Special', batch.countryOfOrigin);
+        
+        // ถ้าพบ special template ให้คืนค่า batch นี้
+        if (template) {
+          console.log(`Found special template for itemKey=${batch.itemKey}, custKey=${batch.custKey}`);
+          return batch;
+        }
+      }
+      
+      // ถ้าไม่พบ row ที่มี special template และมี itemKey ให้ค้นหาจาก itemKey อย่างเดียว
+      const rowsWithItemKey = batches.filter(batch => batch.itemKey && !batch.custKey);
+      
+      // ตรวจสอบแต่ละ row ว่ามี special template หรือไม่ (เฉพาะ itemKey)
+      for (const batch of rowsWithItemKey) {
+        console.log(`Checking if row with itemKey=${batch.itemKey} (no custKey) has special template`);
+        
+        // ค้นหา special template
+        const template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Special', batch.countryOfOrigin);
+        
+        // ถ้าพบ special template ให้คืนค่า batch นี้
+        if (template) {
+          console.log(`Found special template for itemKey=${batch.itemKey} (no custKey)`);
+          return batch;
+        }
+      }
+      
+      // ถ้าไม่พบ row ที่มี special template
+      console.log('No row with special template found');
+      return null;
+    } catch (error) {
+      console.error('Error finding row with special template:', error);
+      return null;
     }
   };
 
@@ -1248,15 +1309,57 @@ const BatchSearch: React.FC<{}> = () => {
       
       setLoadingPreview(true);
       
-      // ตรวจสอบประเภทฉลากที่ต้องการ (Standard หรือ Special)
-      const labelTypeWanted: 'Standard' | 'Special' = 
-        (qcSample || formSheet || palletTag) ? 'Special' : 'Standard';
+      // ตรวจสอบว่ามี special template สำหรับ itemKey และ custKey หรือไม่
+      let hasSpecialTemplate = false;
+      let specialTemplate = null;
       
-      console.log(`Label type wanted: ${labelTypeWanted}`);
+      if (batch.itemKey && batch.custKey) {
+        console.log(`Checking special template for itemKey=${batch.itemKey}, custKey=${batch.custKey}`);
+        specialTemplate = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Special', batch.countryOfOrigin);
+        if (specialTemplate) {
+          hasSpecialTemplate = true;
+          console.log(`Found special template for itemKey=${batch.itemKey}, custKey=${batch.custKey}`);
+        }
+      }
+      
+      // ถ้ายังไม่พบและมี itemKey ให้ค้นหาจาก itemKey อย่างเดียว
+      if (!hasSpecialTemplate && batch.itemKey) {
+        console.log(`Checking special template for itemKey=${batch.itemKey} only`);
+        specialTemplate = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Special', batch.countryOfOrigin);
+        if (specialTemplate) {
+          hasSpecialTemplate = true;
+          console.log(`Found special template for itemKey=${batch.itemKey} only`);
+        }
+      }
+      
+      // ตรวจสอบประเภทฉลากที่ต้องการ (Standard หรือ Special)
+      // ถ้ามี special template หรือเลือก qcSample, formSheet, palletTag ให้ใช้ Special
+      const labelTypeWanted: 'Standard' | 'Special' = 
+        (hasSpecialTemplate || qcSample || formSheet || palletTag) ? 'Special' : 'Standard';
+      
+      console.log(`Label type wanted: ${labelTypeWanted}, hasSpecialTemplate: ${hasSpecialTemplate}`);
+      
+      // เก็บค่าว่าเป็น special label หรือไม่ไว้ใช้ในการแสดงผล
+      setIsSpecialLabel(labelTypeWanted === 'Special' && hasSpecialTemplate);
+      
+      // ถ้าเป็น Special Label ให้ปิดการใช้งาน Generate QR Code
+      if (labelTypeWanted === 'Special' && hasSpecialTemplate) {
+        setGenerateQRCode(false);
+      }
       
       let template: any = null;
       
-      if (labelTypeWanted === 'Standard') {
+      if (labelTypeWanted === 'Special' && hasSpecialTemplate) {
+        // ถ้าต้องการ Special และมี special template ให้ใช้ specialTemplate ที่พบ
+        console.log('Using special template that was found');
+        template = specialTemplate;
+        message.success('Special template loaded successfully');
+        
+        // เก็บ templateId ไว้ใช้ต่อ
+        if (template.templateID || template.TemplateID) {
+          batch.templateId = template.templateID || template.TemplateID;
+        }
+      } else if (labelTypeWanted === 'Standard') {
         // 1. ลำดับการค้นหา Standard Template:
         // 1.1. ค้นหาตาม productKey + customerKey แบบ Standard
         // 1.2. ค้นหาตาม productKey อย่างเดียวแบบ Standard
@@ -1265,12 +1368,12 @@ const BatchSearch: React.FC<{}> = () => {
         
         if (batch.itemKey && batch.custKey) {
           console.log(`Searching standard template by productKey (${batch.itemKey}) and customerKey (${batch.custKey})`);
-          template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Standard');
+          template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Standard', batch.countryOfOrigin);
         }
         
         if (!template && batch.itemKey) {
           console.log(`Searching standard template by productKey (${batch.itemKey}) only`);
-          template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Standard');
+          template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Standard', batch.countryOfOrigin);
         }
         
         if (!template && batch.templateId) {
@@ -1290,15 +1393,16 @@ const BatchSearch: React.FC<{}> = () => {
           message.success('Standard template loaded successfully');
         }
       } else {
+        // กรณีต้องการ Special แต่ไม่พบ special template
         // ค้นหา Special Template เท่านั้น (ไม่ทำ fallback เป็น standard)
         if (batch.itemKey && batch.custKey) {
           console.log(`Searching special template by productKey (${batch.itemKey}) and customerKey (${batch.custKey})`);
-          template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Special');
+          template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Special', batch.countryOfOrigin);
         }
         
         if (!template && batch.itemKey) {
           console.log(`Searching special template by productKey (${batch.itemKey}) only`);
-          template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Special');
+          template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Special', batch.countryOfOrigin);
         }
         
         if (!template) {
@@ -1307,13 +1411,316 @@ const BatchSearch: React.FC<{}> = () => {
           return;
         } else {
           message.success('Special template loaded successfully');
+          
+          // เก็บ templateId ไว้ใช้ต่อ
+          if (template.templateID || template.TemplateID) {
+            batch.templateId = template.templateID || template.TemplateID;
+          }
         }
       }
       
       // สร้าง HTML preview
       const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(template);
-      const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
-      setTemplatePreview(previewHtml);
+      
+      // ถ้าเป็น special template และมี content ให้ใช้ content จาก template โดยตรง
+      if (labelTypeWanted === 'Special' && hasSpecialTemplate && template.content) {
+        try {
+          console.log('Using content from special template for preview');
+          // แปลง template content เป็น object ถ้าจำเป็น
+          const templateContent = typeof template.content === 'string' 
+            ? JSON.parse(template.content) 
+            : template.content;
+          
+          // ใช้ข้อมูลจาก template โดยตรงเพื่อสร้าง HTML
+          let specialPreviewHtml = '';
+          
+          // ตรวจสอบรูปแบบของ templateContent
+          if (templateContent.html) {
+            // กรณีมี HTML โดยตรง
+            console.log('Template has direct HTML content');
+            
+            // แทนที่ placeholders ด้วยข้อมูลจาก batch
+            let htmlContent = templateContent.html;
+            
+            // แทนที่ค่าพื้นฐาน
+            htmlContent = htmlContent
+              .replace(/\{batchNo\}/g, batch.batchNo || '')
+              .replace(/\{productName\}/g, batch.productName || '')
+              .replace(/\{productKey\}/g, batch.productKey || batch.itemKey || '')
+              .replace(/\{itemKey\}/g, batch.itemKey || batch.productKey || '')
+              .replace(/\{netWeight\}/g, batch.netWeight || '')
+              .replace(/\{lotCode\}/g, batch.lotCode || '')
+              .replace(/\{bestBefore\}/g, batch.bestBeforeDate || '')
+              .replace(/\{allergens\}/g, batch.allergensLabel || '');
+            
+            // ค้นหาตำแหน่งของ barcode และ QR code ใน templateContent ถ้ามี
+            const barcodePosition = templateContent.barcodePosition || { x: '50%', y: 'bottom', position: 'absolute', transform: 'translateX(-50%)' };
+            const qrCodePosition = templateContent.qrCodePosition || { x: 'right', y: 'bottom', position: 'absolute' };
+            
+            // สร้าง style string สำหรับ barcode
+            const barcodeStyle = `position: ${barcodePosition.position || 'absolute'}; 
+                                 ${barcodePosition.y === 'bottom' ? 'bottom: 20px;' : `top: ${barcodePosition.y}px;`} 
+                                 ${barcodePosition.x === '50%' ? 'left: 50%; transform: translateX(-50%);' : `left: ${barcodePosition.x}px;`}
+                                 ${barcodePosition.width ? `width: ${barcodePosition.width}px;` : ''}
+                                 ${barcodePosition.height ? `height: ${barcodePosition.height}px;` : ''}`;
+            
+            // สร้าง style string สำหรับ QR code
+            const qrCodeStyle = `position: ${qrCodePosition.position || 'absolute'}; 
+                                ${qrCodePosition.y === 'bottom' ? 'bottom: 20px;' : `top: ${qrCodePosition.y}px;`} 
+                                ${qrCodePosition.x === 'right' ? 'right: 20px;' : `left: ${qrCodePosition.x}px;`}
+                                ${qrCodePosition.width ? `width: ${qrCodePosition.width}px;` : ''}
+                                ${qrCodePosition.height ? `height: ${qrCodePosition.height}px;` : ''}`;
+            
+            // สร้าง container
+            specialPreviewHtml = `
+              <div class="template-preview" style="width: ${canvasWidth}px; height: ${canvasHeight}px; position: relative; background: white; border: 1px solid #ccc;">
+                <div id="template-container" data-template-id="${template.templateID}" style="width: 100%; height: 100%;">
+                  ${htmlContent}
+                </div>
+                
+                <!-- Render barcode for the batch number -->
+                <svg id="barcode-${batch.batchNo}" class="barcode" style="${barcodeStyle}"></svg>
+                
+                <!-- Add QR Code if enabled -->
+                ${generateQRCode ? `<canvas id="qrcode-${batch.batchNo}" width="90" height="90" style="${qrCodeStyle}"></canvas>` : ''}
+              </div>
+            `;
+          } else if (templateContent.elements) {
+            // กรณีมี elements ที่เป็น objects
+            console.log('Template has elements array, creating dynamic content');
+            
+            // ตัวแปรเพื่อตรวจสอบว่ามี barcode และ QR code หรือไม่
+            let hasBarcodeElement = false;
+            let hasQrCodeElement = false;
+            
+            // ตรวจสอบก่อนว่ามี elements ประเภท barcode หรือ qrcode หรือไม่
+            templateContent.elements.forEach((element: any) => {
+              if (element.type === 'barcode') hasBarcodeElement = true;
+              if (element.type === 'qr' || element.type === 'qrcode') hasQrCodeElement = true;
+            });
+            
+            console.log('Template has barcode element:', hasBarcodeElement);
+            console.log('Template has QR code element:', hasQrCodeElement);
+            
+            // สร้าง container
+            specialPreviewHtml = `
+              <div class="template-preview" style="width: ${canvasWidth}px; height: ${canvasHeight}px; position: relative; background: white; border: 1px solid #ccc; overflow: hidden;">
+                <div id="template-container" data-template-id="${template.templateID}" style="position: absolute; width: 100%; height: 100%; top: 0; left: 0;">
+                  <!-- Dynamic elements will be rendered here -->
+            `;
+            
+            // วนลูปสร้าง elements - จัดเรียงตาม layer หรือ z-index (ถ้ามี)
+            const sortedElements = [...templateContent.elements].sort((a, b) => {
+              const aLayer = a.layer || 0;
+              const bLayer = b.layer || 0;
+              return aLayer - bLayer;
+            });
+            
+            sortedElements.forEach((element: any) => {
+              if (element.type === 'text') {
+                // แทนที่ placeholders ในข้อความ
+                let text = element.text || '';
+                text = text
+                  .replace(/\{batchNo\}/g, batch.batchNo || '')
+                  .replace(/\{productName\}/g, batch.productName || '')
+                  .replace(/\{productKey\}/g, batch.productKey || batch.itemKey || '')
+                  .replace(/\{itemKey\}/g, batch.itemKey || batch.productKey || '')
+                  .replace(/\{netWeight\}/g, batch.netWeight || '')
+                  .replace(/\{lotCode\}/g, batch.lotCode || '')
+                  .replace(/\{bestBefore\}/g, batch.bestBeforeDate || '')
+                  .replace(/\{allergens\}/g, batch.allergensLabel || '');
+                
+                // คำนวณ z-index สำหรับ text
+                const zIndex = element.layer || 1;
+                
+                // เพิ่ม style เพิ่มเติมตามที่กำหนดใน element
+                const fontWeight = element.fontWeight || 'normal';
+                const fontStyle = element.fontStyle || 'normal';
+                const textDecoration = element.textDecoration || 'none';
+                const textAlign = element.align || element.textAlign || 'left';
+                
+                specialPreviewHtml += `
+                  <div style="position: absolute; transform: translate(${element.x}px, ${element.y}px); width: ${element.width}px; height: ${element.height}px; font-size: ${element.fontSize || 14}px; font-family: ${element.fontFamily || 'Arial'}; font-weight: ${fontWeight}; font-style: ${fontStyle}; text-decoration: ${textDecoration}; text-align: ${textAlign}; color: ${element.fill || '#000000'}; z-index: ${zIndex}; overflow: hidden;">
+                    ${text}
+                  </div>
+                `;
+              } else if (element.type === 'barcode') {
+                // สร้าง barcode ด้วยข้อมูลจาก element โดยตรง
+                console.log('Adding barcode element at position:', element.x, element.y, 'with dimensions:', element.width, element.height);
+                
+                // เก็บค่าตำแหน่งและขนาดเดิมไว้ใช้ในการแสดงผล barcode ให้ตรงกับ Template Designer
+                specialPreviewHtml += `
+                   <div class="barcode-container" style="position: absolute; top: ${element.y}px; left: ${element.x}px; width: ${element.width || 200}px; height: ${element.height || 80}px; z-index: 5; overflow: visible; pointer-events: none;">
+                    <svg id="barcode-${batch.batchNo}" class="barcode" 
+                        data-original-x="${element.x}" 
+                        data-original-y="${element.y}" 
+                        data-original-width="${element.width || 200}" 
+                        data-original-height="${element.height || 80}"
+                        style="width: 100%; height: 100%;"></svg>
+                  </div>
+                `;
+              } else if (element.type === 'qr' || element.type === 'qrcode') {
+                // สร้าง QR code ด้วยข้อมูลจาก element โดยตรง
+                console.log('Adding QR code element at position:', element.x, element.y, 'with dimensions:', element.width, element.height);
+                
+                // สร้างข้อมูลสำหรับ QR code
+                const qrValue = `BATCH:${batch.batchNo}\nPRODUCT:${batch.productName}\nLOT:${batch.lotCode}\nNET_WEIGHT:${batch.netWeight}\nBEST_BEFORE:${batch.bestBeforeDate}\nALLERGENS:${batch.allergensLabel}`;
+                
+                specialPreviewHtml += `
+                  <div style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none;">
+                    <canvas id="qrcode-${batch.batchNo}" 
+                          data-qr-value="${qrValue}" 
+                          data-original-x="${element.x}" 
+                          data-original-y="${element.y}" 
+                          data-original-width="${element.width || 90}" 
+                          data-original-height="${element.height || 90}" 
+                          width="${element.width || 90}" 
+                          height="${element.height || 90}" 
+                          style="position: absolute; transform: translate(${element.x}px, ${element.y}px); z-index: 5;"></canvas>
+                  </div>
+                `;
+              } else if (element.type === 'rect') {
+                // สร้าง rectangle
+                const rectStyle = `
+                  position: absolute;
+                  transform: translate(${element.x}px, ${element.y}px);
+                  width: ${element.width}px;
+                  height: ${element.height}px;
+                  background-color: ${element.fill || 'transparent'};
+                  border: ${element.stroke ? `${element.strokeWidth || 1}px ${element.strokeStyle || 'solid'} ${element.stroke}` : 'none'};
+                  z-index: ${element.layer || 1};
+                `;
+                specialPreviewHtml += `<div style="${rectStyle}"></div>`;
+              }
+            });
+            
+            // เพิ่ม barcode และ QR code เฉพาะกรณีที่ไม่มีใน elements
+            if (!hasBarcodeElement) {
+              // ดึงข้อมูลตำแหน่งจาก template.defaultBarcodePosition หรือใช้ค่าเริ่มต้น
+              const defaultBarcodePosition = templateContent.defaultBarcodePosition || template.defaultBarcodePosition || {
+                x: (canvasWidth / 2) - 100, // ตรงกลาง
+                y: canvasHeight - 100, // ด้านล่าง
+                width: 200,
+                height: 80
+              };
+              
+              console.log('Using default barcode position:', defaultBarcodePosition);
+              
+              specialPreviewHtml += `
+                <div style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none;">
+                  <svg id="barcode-${batch.batchNo}" class="barcode" 
+                       data-original-x="${defaultBarcodePosition.x}" 
+                       data-original-y="${defaultBarcodePosition.y}" 
+                       data-original-width="${defaultBarcodePosition.width}" 
+                       data-original-height="${defaultBarcodePosition.height}"
+                       style="position: absolute; transform: translate(${defaultBarcodePosition.x}px, ${defaultBarcodePosition.y}px); width: ${defaultBarcodePosition.width}px; height: ${defaultBarcodePosition.height}px; z-index: 5;"></svg>
+                </div>
+              `;
+            }
+            
+            if (generateQRCode && !hasQrCodeElement) {
+              // ดึงข้อมูลตำแหน่งจาก template.defaultQrCodePosition หรือใช้ค่าเริ่มต้น
+              const defaultQrCodePosition = templateContent.defaultQrCodePosition || template.defaultQrCodePosition || {
+                x: canvasWidth - 100, // ด้านขวา
+                y: canvasHeight - 100, // ด้านล่าง
+                width: 90,
+                height: 90
+              };
+              
+              console.log('Using default QR code position:', defaultQrCodePosition);
+              
+              specialPreviewHtml += `
+                <div style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none;">
+                  <canvas id="qrcode-${batch.batchNo}" 
+                         data-qr-value="BATCH:${batch.batchNo}\nPRODUCT:${batch.productName}\nLOT:${batch.lotCode}\nNET_WEIGHT:${batch.netWeight}\nBEST_BEFORE:${batch.bestBeforeDate}\nALLERGENS:${batch.allergensLabel}" 
+                         data-original-x="${defaultQrCodePosition.x}" 
+                         data-original-y="${defaultQrCodePosition.y}" 
+                         data-original-width="${defaultQrCodePosition.width}" 
+                         data-original-height="${defaultQrCodePosition.height}" 
+                         width="${defaultQrCodePosition.width}" 
+                         height="${defaultQrCodePosition.height}" 
+                         style="position: absolute; transform: translate(${defaultQrCodePosition.x}px, ${defaultQrCodePosition.y}px); z-index: 5;"></canvas>
+                </div>
+              `;
+            }
+            
+            // ปิด container
+            specialPreviewHtml += `
+                </div>
+              </div>
+            `;
+          } else {
+            // กรณีไม่มีทั้ง html และ elements
+            console.log('Template does not have html or elements, using basic structure');
+            
+            // กำหนดตำแหน่ง barcode และ QR code
+            const defaultBarcodePosition = {
+              x: (canvasWidth / 2) - 100, // ตรงกลาง
+              y: canvasHeight - 100, // ด้านล่าง
+              width: 200,
+              height: 80
+            };
+            
+            const defaultQrCodePosition = {
+              x: canvasWidth - 100, // ด้านขวา
+              y: canvasHeight - 100, // ด้านล่าง
+              width: 90,
+              height: 90
+            };
+            
+            console.log('Using default barcode position:', defaultBarcodePosition);
+            console.log('Using default QR code position:', defaultQrCodePosition);
+            
+            specialPreviewHtml = `
+              <div class="template-preview" style="width: ${canvasWidth}px; height: ${canvasHeight}px; position: relative; background: white; border: 1px solid #ccc;">
+                <div style="position: absolute; top: 20px; left: 0; width: 100%; text-align: center; font-size: 24px; font-weight: bold;">
+                  ${batch.productName || ''}
+                </div>
+                <div style="position: absolute; top: 60px; left: 0; width: 100%; text-align: center; font-size: 36px; font-weight: bold;">
+                  ${batch.itemKey || batch.productKey || ''}
+                </div>
+                <div style="position: absolute; top: 120px; left: 50px; font-size: 18px;">
+                  <div>Batch No: ${batch.batchNo || ''}</div>
+                  <div>Lot Code: ${batch.lotCode || ''}</div>
+                  <div>Best Before: ${batch.bestBeforeDate || ''}</div>
+                  <div>Net Weight: ${batch.netWeight || ''} KG/BAG</div>
+                  <div>Allergens: ${batch.allergensLabel || ''}</div>
+                </div>
+                
+                <!-- Render barcode for the batch number -->
+                <svg id="barcode-${batch.batchNo}" class="barcode" style="position: absolute; left: ${defaultBarcodePosition.x}px; top: ${defaultBarcodePosition.y}px; width: ${defaultBarcodePosition.width}px; height: ${defaultBarcodePosition.height}px; z-index: 5;"></svg>
+                
+                <!-- Add QR Code if enabled -->
+                ${generateQRCode ? `<canvas id="qrcode-${batch.batchNo}" data-qr-value="BATCH:${batch.batchNo}\nPRODUCT:${batch.productName}\nLOT:${batch.lotCode}\nNET_WEIGHT:${batch.netWeight}\nBEST_BEFORE:${batch.bestBeforeDate}\nALLERGENS:${batch.allergensLabel}" width="${defaultQrCodePosition.width}" height="${defaultQrCodePosition.height}" style="position: absolute; left: ${defaultQrCodePosition.x}px; top: ${defaultQrCodePosition.y}px; z-index: 5;"></canvas>` : ''}
+              </div>
+            `;
+          }
+          
+          console.log('Generated special preview HTML with dimensions:', canvasWidth, 'x', canvasHeight);
+          setTemplatePreview(specialPreviewHtml);
+          
+          // เรียกใช้ initQRCode ทันทีหลังจากการ setTemplatePreview
+          setTimeout(() => {
+            console.log('Calling initQRCode after setting template preview');
+            initQRCode();
+          }, 300);
+        } catch (error) {
+          console.error('Error parsing special template content:', error);
+          // Fallback to standard preview if error occurs
+          const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
+          setTemplatePreview(previewHtml);
+        }
+      } else {
+        // ใช้ generatePreviewHtml สำหรับ standard template หรือเมื่อไม่พบ special template
+        const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
+        setTemplatePreview(previewHtml);
+        
+        // เรียกใช้ initQRCode ทันทีหลังจากการ setTemplatePreview
+        setTimeout(() => {
+          console.log('Calling initQRCode after setting standard template preview');
+          initQRCode();
+        }, 300);
+      }
       
     } catch (error) {
       console.error('Error preparing preview:', error);
@@ -1677,7 +2084,7 @@ const BatchSearch: React.FC<{}> = () => {
       // เพิ่มฉลากอื่นๆ ถ้าเลือก
       const specialLabels = [];
       if (qcSample) specialLabels.push("QC SAMPLE");
-      if (formSheet) specialLabels.push("FORMULA SHEET");
+      if (formSheet) specialLabels.push("FORMULATION SHEET");
       if (palletTag) specialLabels.push("PALLET TAG");
       
       const totalPages = totalLabels + specialLabels.length;
@@ -1704,6 +2111,8 @@ const BatchSearch: React.FC<{}> = () => {
             <html>
               <head>
                 <title>Label Print - ${selectedBatch.batchNo}</title>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
                   @page { 
                     size: 4in 4in; 
@@ -1713,6 +2122,7 @@ const BatchSearch: React.FC<{}> = () => {
                   body { 
                     margin: 0; 
                     padding: 0;
+                    font-family: Arial, sans-serif;
                   }
                   .label-container {
                     width: 400px;
@@ -1723,6 +2133,7 @@ const BatchSearch: React.FC<{}> = () => {
                     page-break-after: always;
                     break-after: page;
                     margin-bottom: 20px;
+                    overflow: hidden;
                   }
                   .special-label {
                     position: relative;
@@ -1738,6 +2149,34 @@ const BatchSearch: React.FC<{}> = () => {
                     text-align: center;
                     padding: 5px;
                     font-weight: bold;
+                  }
+                  /* เพิ่ม CSS เพื่อแก้ไขปัญหาการแสดงผลฉลากจีน */
+                  .template-preview {
+                    position: relative;
+                    width: 100%;
+                    height: 100%;
+                    overflow: hidden;
+                  }
+                  .chinese-text {
+                    font-family: 'SimSun', 'Microsoft YaHei', 'SimHei', sans-serif;
+                    font-weight: normal;
+                  }
+                  /* ทำให้แน่ใจว่าข้อความแสดงผลถูกต้อง */
+                  .barcode {
+                    position: absolute;
+                    z-index: 5;
+                  }
+                  canvas {
+                    position: absolute;
+                    z-index: 5;
+                  }
+                  /* จัดตำแหน่งให้ถูกต้อง */
+                  div[id^="template-container"] {
+                    position: absolute;
+                    width: 100%;
+                    height: 100%;
+                    top: 0;
+                    left: 0;
                   }
                 </style>
                 <!-- เพิ่ม JsBarcode ทันทีในส่วนหัว -->
@@ -1783,6 +2222,11 @@ const BatchSearch: React.FC<{}> = () => {
                         console.log('JsBarcode available:', typeof window.JsBarcode !== 'undefined');
                         console.log('QRCode available:', typeof window.QRCode !== 'undefined');
                         
+                        // แก้ไขฟอนต์จีนให้แสดงผลถูกต้อง
+                        document.querySelectorAll('.chinese-text').forEach(function(el) {
+                          el.style.fontFamily = "'SimSun', 'Microsoft YaHei', 'SimHei', sans-serif";
+                        });
+                        
                         // ฟังก์ชันสำหรับแสดง barcode ในทุกหน้า
                         function renderAllBarcodes() {
                           try {
@@ -1804,6 +2248,7 @@ const BatchSearch: React.FC<{}> = () => {
                                 displayValue: true,
                                 fontSize: 14,
                                 fontFamily: 'monospace',
+                                margin: 5,
                                 textAlign: 'center',
                                 textPosition: 'bottom',
                                 textMargin: 2,
@@ -1856,68 +2301,105 @@ const BatchSearch: React.FC<{}> = () => {
               <body>
           `;
           
-          // สร้างฉลากสำหรับแต่ละถุง
-          for (let bagNumber = startBag; bagNumber <= endBag; bagNumber++) {
-            // ตรวจสอบ palletNo 
-            const palletNo = selectedBatch.palletNo || '01';
-            
-            // กำหนดเลขถุงให้มีรูปแบบ 01, 02, ...
-            const formattedBagNo = bagNumber.toString().padStart(2, '0');
-            
-            // สร้าง batch object ใหม่สำหรับแต่ละ bag
-            const bagBatch = {
-              ...selectedBatch,
-              bagNo: formattedBagNo,
-              bagSequence: bagNumber,
-              totalBags: endBag - startBag + 1,
-              bagPosition: `${bagNumber}/${endBag - startBag + 1}`,
-              lineCode: `P${palletNo}B${formattedBagNo}`, // กำหนด lineCode ใหม่ตามเลขถุง
-              generateQRCode: generateQRCode // คงสถานะการสร้าง QR Code
-            };
-            
-            // สร้าง QR code value
-            const qrValue = `BATCH:${bagBatch.batchNo}\nPRODUCT:${bagBatch.productName}\nLOT:${bagBatch.lotCode}\nNET_WEIGHT:${bagBatch.netWeight}\nBEST_BEFORE:${bagBatch.bestBeforeDate}\nALLERGENS:${bagBatch.allergensLabel}`;
-            
-            // สร้างเทมเพลตสำหรับแต่ละถุง
-            try {
-              let labelHtml = '';
-              if (selectedBatch.templateId) {
-                // ถ้ามี templateId ให้โหลด template
-                const apiUrl = `${ApiHelper.getApiBaseUrl()}/templates/${selectedBatch.templateId}`;
-                console.log('Loading template from:', apiUrl);
-                
-                const headers = ApiHelper.getAuthHeaders();
-                const response = await axios.get(apiUrl, { headers });
-                
-                const template = response.data;
-                const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(template);
-                labelHtml = generatePreviewHtml(canvasWidth, canvasHeight, bagBatch);
-              } else {
-                // ถ้าไม่มี templateId ให้ใช้ template มาตรฐาน
-                const templateObj = createStandardTemplate(bagBatch);
-                const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(templateObj);
-                if (templateObj) {
-                  labelHtml = generatePreviewHtml(canvasWidth, canvasHeight, bagBatch);
-                }
-              }
+          // ตรวจสอบว่ามี templatePreview หรือไม่
+          const isUsingSpecialTemplate = templatePreview && templatePreview.length > 0;
+          console.log('Is using special template for printing:', isUsingSpecialTemplate);
+          
+          if (isUsingSpecialTemplate) {
+            // ถ้ามี templatePreview ให้ใช้สำหรับทุก label
+            for (let bagNumber = startBag; bagNumber <= endBag; bagNumber++) {
+              // กำหนดเลขถุงให้มีรูปแบบ 01, 02, ...
+              const formattedBagNo = bagNumber.toString().padStart(2, '0');
               
-              // เพิ่ม data attribute สำหรับ QR code
-              labelHtml = labelHtml.replace(`id="qrcode-${bagBatch.batchNo}"`, `id="qrcode-${bagBatch.batchNo}" data-qr-value="${qrValue}"`);
+              // สร้าง QR code value
+              const qrValue = `BATCH:${selectedBatch.batchNo}\nPRODUCT:${selectedBatch.productName}\nLOT:${selectedBatch.lotCode}\nNET_WEIGHT:${selectedBatch.netWeight}\nBEST_BEFORE:${selectedBatch.bestBeforeDate}\nALLERGENS:${selectedBatch.allergensLabel}`;
+              
+              // แทนที่ค่า bagNo ในเทมเพลต
+              let labelHtml = templatePreview;
+              
+              // เพิ่ม class และคุณสมบัติที่จำเป็นเพื่อให้แสดงผลถูกต้อง
+              labelHtml = labelHtml.replace(/<div class="template-preview"/g, '<div class="template-preview"');
+              labelHtml = labelHtml.replace(/>带卡马萨拉风味调</g, ' class="chinese-text">带卡马萨拉风味调');
+              labelHtml = labelHtml.replace(/>配料表:/g, ' class="chinese-text">配料表:');
+              
+              // เปลี่ยนค่า data-qr-value สำหรับ QR code
+              labelHtml = labelHtml.replace(new RegExp(`data-qr-value="[^"]*"`, 'g'), `data-qr-value="${qrValue}"`);
               
               printHTML += `
                 <div class="label-container">
                   ${labelHtml}
                 </div>
               `;
-            } catch (error) {
-              console.error(`Error generating label for bag ${bagNumber}:`, error);
+            }
+          } else {
+            // ถ้าไม่มี templatePreview ให้ใช้วิธีเดิม
+            for (let bagNumber = startBag; bagNumber <= endBag; bagNumber++) {
+              // ตรวจสอบ palletNo 
+              const palletNo = selectedBatch.palletNo || '01';
+              
+              // กำหนดเลขถุงให้มีรูปแบบ 01, 02, ...
+              const formattedBagNo = bagNumber.toString().padStart(2, '0');
+              
+              // สร้าง batch object ใหม่สำหรับแต่ละ bag
+              const bagBatch = {
+                ...selectedBatch,
+                bagNo: formattedBagNo,
+                bagSequence: bagNumber,
+                totalBags: endBag - startBag + 1,
+                bagPosition: `${bagNumber}/${endBag - startBag + 1}`,
+                lineCode: `P${palletNo}B${formattedBagNo}`, // กำหนด lineCode ใหม่ตามเลขถุง
+                generateQRCode: generateQRCode // คงสถานะการสร้าง QR Code
+              };
+              
+              // สร้าง QR code value
+              const qrValue = `BATCH:${bagBatch.batchNo}\nPRODUCT:${bagBatch.productName}\nLOT:${bagBatch.lotCode}\nNET_WEIGHT:${bagBatch.netWeight}\nBEST_BEFORE:${bagBatch.bestBeforeDate}\nALLERGENS:${bagBatch.allergensLabel}`;
+              
+              // สร้างเทมเพลตสำหรับแต่ละถุง
+              try {
+                let labelHtml = '';
+                if (selectedBatch.templateId) {
+                  // ถ้ามี templateId ให้โหลด template
+                  const apiUrl = `${ApiHelper.getApiBaseUrl()}/templates/${selectedBatch.templateId}`;
+                  console.log('Loading template from:', apiUrl);
+                  
+                  const headers = ApiHelper.getAuthHeaders();
+                  const response = await axios.get(apiUrl, { headers });
+                  
+                  const template = response.data;
+                  const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(template);
+                  labelHtml = generatePreviewHtml(canvasWidth, canvasHeight, bagBatch);
+                } else {
+                  // ถ้าไม่มี templateId ให้ใช้ template มาตรฐาน
+                  const templateObj = createStandardTemplate(bagBatch);
+                  const { width: canvasWidth, height: canvasHeight } = TemplateHelper.getTemplateDimensions(templateObj);
+                  if (templateObj) {
+                    labelHtml = generatePreviewHtml(canvasWidth, canvasHeight, bagBatch);
+                  }
+                }
+                
+                // เพิ่ม data attribute สำหรับ QR code
+                labelHtml = labelHtml.replace(`id="qrcode-${bagBatch.batchNo}"`, `id="qrcode-${bagBatch.batchNo}" data-qr-value="${qrValue}"`);
+                
+                printHTML += `
+                  <div class="label-container">
+                    ${labelHtml}
+                  </div>
+                `;
+              } catch (error) {
+                console.error(`Error generating label for bag ${bagNumber}:`, error);
+              }
             }
           }
           
           // เพิ่มฉลากพิเศษ (QC, Formula Sheet, Pallet Tag)
           specialLabels.forEach(labelType => {
-            // ใช้ข้อมูล selectedBatch ล่าสุดสำหรับฉลากพิเศษ
-            const specialLabelHtml = templatePreview || '';
+            // ใช้ข้อมูล templatePreview สำหรับฉลากพิเศษ
+            let specialLabelHtml = templatePreview || '';
+            
+            // เพิ่ม class และคุณสมบัติที่จำเป็นเพื่อให้แสดงผลถูกต้อง
+            specialLabelHtml = specialLabelHtml.replace(/<div class="template-preview"/g, '<div class="template-preview"');
+            specialLabelHtml = specialLabelHtml.replace(/>带卡马萨拉风味调</g, ' class="chinese-text">带卡马萨拉风味调');
+            specialLabelHtml = specialLabelHtml.replace(/>配料表:/g, ' class="chinese-text">配料表:');
             
             printHTML += `
               <div class="label-container special-label" data-label-type="${labelType}">
@@ -2307,6 +2789,76 @@ const BatchSearch: React.FC<{}> = () => {
     // ตรวจสอบว่าเราอยู่ในฝั่ง browser
     if (typeof window === 'undefined') return;
     
+    // ตรวจสอบว่า JsBarcode ถูกโหลดแล้วหรือยัง และทำการเรียกใช้เพื่อแสดง barcode
+    if (typeof window.JsBarcode !== 'undefined') {
+      // ค้นหา elements ที่มี class เป็น barcode
+      const barcodeElements = document.querySelectorAll('.barcode');
+      console.log('Found barcode elements:', barcodeElements.length);
+      
+      barcodeElements.forEach((element) => {
+        const svgElement = element as SVGElement;
+        const batchNo = svgElement.id.replace('barcode-', '');
+        
+        // ใช้ค่าขนาดจาก data-attributes ที่เราเก็บไว้
+        const width = parseInt(svgElement.getAttribute('data-original-width') || '200');
+        const height = parseInt(svgElement.getAttribute('data-original-height') || '80');
+        
+        console.log(`Rendering barcode for batch ${batchNo} with dimensions: ${width}x${height}`);
+        
+        try {
+          // กำหนดค่า options สำหรับ JsBarcode
+          const options = {
+            format: 'CODE128',
+            width: 2,                 // ความกว้างของแต่ละแท่ง barcode
+            height: height * 0.7,     // เพิ่มความสูงของแท่ง barcode เป็น 70% ของความสูงทั้งหมด
+            displayValue: true,       // แสดงตัวเลขใต้ barcode
+            fontSize: 13,             // ลดขนาดตัวอักษรลงเล็กน้อย
+            textAlign: 'center',
+            textPosition: 'bottom',
+            textMargin: 2,            // ระยะห่างระหว่างแท่ง barcode กับตัวเลข
+            margin: 0,                // ไม่เพิ่ม margin รอบ barcode
+            background: 'transparent' // พื้นหลังโปร่งใส
+          };
+          
+          // ล้าง SVG ก่อนเพื่อป้องกันการซ้อนทับ
+          svgElement.innerHTML = '';
+          
+          // ปรับขนาด SVG ให้พอดี
+          svgElement.setAttribute('width', width.toString());
+          svgElement.setAttribute('height', height.toString());
+          
+          // แสดง barcode โดยตรงบน SVG element
+          window.JsBarcode(svgElement, batchNo, options);
+          
+          // เพิ่ม CSS ให้กับ barcode เพื่อให้แน่ใจว่าจะแสดงถูกต้อง
+          const barcodeContainer = svgElement.closest('div');
+          if (barcodeContainer) {
+            barcodeContainer.style.zIndex = '5';
+          }
+          
+          // ตรวจสอบว่า barcode ถูกสร้างขึ้นแล้ว
+          console.log(`Barcode for ${batchNo} rendered with options:`, options);
+        } catch (e) {
+          console.error(`Error rendering barcode for ${batchNo}:`, e);
+        }
+      });
+    } else {
+      // ถ้ายังไม่ถูกโหลดให้ลองโหลดจาก module
+      try {
+        import('jsbarcode').then(jsbarcodeModule => {
+          window.JsBarcode = jsbarcodeModule.default || jsbarcodeModule;
+          console.log('JsBarcode library loaded successfully');
+          
+          // เรียกใช้ initQRCode อีกครั้งหลังจากโหลด JsBarcode สำเร็จ
+          setTimeout(initQRCode, 100);
+        }).catch(err => {
+          console.error('Failed to load JsBarcode library:', err);
+        });
+      } catch (e) {
+        console.error('Error initializing JsBarcode:', e);
+      }
+    }
+    
     // ตรวจสอบว่า QRCode ถูกโหลดแล้วหรือยัง
     if (typeof window.QRCode === 'undefined') {
       // ถ้ายังไม่ถูกโหลดให้ลองโหลดจาก module
@@ -2314,6 +2866,39 @@ const BatchSearch: React.FC<{}> = () => {
         import('qrcode').then(qrcodeModule => {
           window.QRCode = qrcodeModule.default || qrcodeModule;
           console.log('QRCode library loaded successfully');
+          
+          // เมื่อโหลด QRCode สำเร็จแล้ว ให้ตรวจสอบและแสดง QR codes ที่อาจมีอยู่ในหน้าจอ
+          setTimeout(() => {
+            const qrElements = document.querySelectorAll('[id^="qrcode-"]');
+            console.log('Found QR elements after load:', qrElements.length);
+            
+            qrElements.forEach(element => {
+              const canvas = element as HTMLCanvasElement;
+              const batchNo = canvas.id.replace('qrcode-', '');
+              
+              try {
+                // ตรวจสอบว่า canvas สามารถใช้งานได้หรือไม่
+                if (!canvas || typeof canvas.getContext !== 'function') {
+                  console.warn(`QR code canvas for ${batchNo} is not ready or valid. Skipping rendering.`);
+                  return;
+                }
+                
+                // สร้างข้อมูลสำหรับ QR code
+                const qrValueFromAttribute = canvas.getAttribute('data-qr-value') || `BATCH:${batchNo}`;
+                
+                console.log('Rendering QR code for:', batchNo, 'with value:', qrValueFromAttribute);
+                
+                // แสดง QR code
+                window.QRCode.toCanvas(canvas, qrValueFromAttribute, {
+                  width: canvas.width,
+                  margin: 1,
+                  scale: 4
+                });
+              } catch (e) {
+                console.error(`Error rendering QR code for ${batchNo}:`, e);
+              }
+            });
+          }, 500);
         }).catch(err => {
           console.error('Failed to load QRCode library:', err);
           
@@ -2357,6 +2942,39 @@ const BatchSearch: React.FC<{}> = () => {
       } catch (e) {
         console.error('Error initializing QRCode:', e);
       }
+    } else {
+      // หากมี QRCode แล้ว ให้ตรวจสอบและแสดง QR codes ที่อาจมีอยู่ในหน้าจอ
+      setTimeout(() => {
+        const qrElements = document.querySelectorAll('[id^="qrcode-"]');
+        console.log('Found QR elements with existing library:', qrElements.length);
+        
+        qrElements.forEach(element => {
+          const canvas = element as HTMLCanvasElement;
+          const batchNo = canvas.id.replace('qrcode-', '');
+          
+          try {
+            // ตรวจสอบว่า canvas สามารถใช้งานได้หรือไม่
+            if (!canvas || typeof canvas.getContext !== 'function') {
+              console.warn(`QR code canvas for ${batchNo} is not ready or valid. Skipping rendering.`);
+              return;
+            }
+            
+            // สร้างข้อมูลสำหรับ QR code
+            const qrValueFromAttribute = canvas.getAttribute('data-qr-value') || `BATCH:${batchNo}`;
+            
+            console.log('Rendering QR code for:', batchNo, 'with value:', qrValueFromAttribute);
+            
+            // แสดง QR code
+            window.QRCode.toCanvas(canvas, qrValueFromAttribute, {
+              width: canvas.width,
+              margin: 1,
+              scale: 4
+            });
+          } catch (e) {
+            console.error(`Error rendering QR code for ${batchNo}:`, e);
+          }
+        });
+      }, 500);
     }
   };
 
@@ -2437,7 +3055,20 @@ const BatchSearch: React.FC<{}> = () => {
   // เรียกใช้ setupQrScanner เมื่อคอมโพเนนต์โหลดเสร็จ
   useEffect(() => {
     setupQrScanner();
+    
+    // ทำการเรียกใช้ initQRCode เมื่อคอมโพเนนต์โหลดเสร็จ
+    initQRCode();
   }, []);
+  
+  // เรียกใช้ initQRCode เมื่อมีการเปลี่ยนแปลงค่า templatePreview
+  useEffect(() => {
+    if (templatePreview && previewVisible) {
+      console.log('templatePreview changed, calling initQRCode');
+      setTimeout(() => {
+        initQRCode();
+      }, 300);
+    }
+  }, [templatePreview, previewVisible]);
 
   /* ------------------------------------------------------------------------ */
   /* Helper - Create Elements From Preview                                        */
@@ -3080,7 +3711,13 @@ const BatchSearch: React.FC<{}> = () => {
               icon={<EditOutlined />}
               onClick={() => {
                 if (selectedBatch && selectedBatch.templateId) {
-                  // ไปที่หน้า Template Designer โดยใช้ ID ของ template
+                  // ถ้าเป็น Special Label ให้นำทางไปหน้า Template Designer โดยตรง
+                  if (isSpecialLabel) {
+                    router.push(`/templates/designer?id=${selectedBatch.templateId}`);
+                    return;
+                  }
+                  
+                  // ถ้าเป็น Standard Label ให้ใช้วิธีเดิม
                   try {
                     // ก่อนที่จะไปยังหน้า Template Designer ให้เก็บข้อมูล elements ของ preview ลงใน localStorage
                     const elements = createElementsFromPreview();
@@ -3155,12 +3792,14 @@ const BatchSearch: React.FC<{}> = () => {
                           value={selectedProductionDate || ''}
                           onChange={(e) => setSelectedProductionDate(e.target.value)}
                           style={{ width: '100%', marginRight: 8 }}
+                          disabled={isSpecialLabel} // ปิดการแก้ไขถ้าเป็น Special Label
                         />
                         <Button 
                           type="primary"
                           icon={<SyncOutlined />}
                           onClick={handleResyncPreview}
                           loading={isResyncingPreview}
+                          disabled={isSpecialLabel} // ปิดการกด Resync ถ้าเป็น Special Label
                           style={{ 
                             backgroundColor: '#5D4037', 
                             borderColor: '#5D4037',
@@ -3171,7 +3810,9 @@ const BatchSearch: React.FC<{}> = () => {
                         </Button>
                       </div>
                       <Text type="secondary" style={{ fontSize: '12px' }}>
-                        Change production date and click Resync to update the preview
+                        {isSpecialLabel 
+                          ? 'Production date cannot be changed for Special Labels' 
+                          : 'Change production date and click Resync to update the preview'}
                       </Text>
                     </div>
                     
@@ -3219,9 +3860,20 @@ const BatchSearch: React.FC<{}> = () => {
                                   checked={generateQRCode} 
                                   onChange={(e) => setGenerateQRCode(e.target.checked)}
                                   id="generate-qrcode"
+                                  disabled={isSpecialLabel} // ปิดการใช้งานถ้าเป็น Special Label
                                 />
-                                <label htmlFor="generate-qrcode">Generate QR Code</label>
+                                <label 
+                                  htmlFor="generate-qrcode"
+                                  style={{ color: isSpecialLabel ? '#d9d9d9' : 'inherit' }}
+                                >
+                                  Generate QR Code
+                                </label>
                               </Space>
+                              {isSpecialLabel && (
+                                <Text type="secondary" style={{ fontSize: '12px' }}>
+                                  QR code generation is disabled for Special Labels
+                                </Text>
+                              )}
                             </Space>
                           </Tooltip>
                         </div>
@@ -3254,7 +3906,7 @@ const BatchSearch: React.FC<{}> = () => {
                                 onChange={(e) => setFormSheet(e.target.checked)}
                                 id="formula-sheet"
                               />
-                              <label htmlFor="formula-sheet">Formula Sheet</label>
+                              <label htmlFor="formula-sheet">Formulation Sheet</label>
                             </Space>
                           </Tooltip>
                           
@@ -3281,7 +3933,7 @@ const BatchSearch: React.FC<{}> = () => {
                           ? `Printing bag ${startBag}` 
                           : `Printing bags ${startBag} to ${endBag}`}
                         {qcSample || formSheet || palletTag 
-                          ? ` + ${[qcSample && 'QC Sample', formSheet && 'Formula Sheet', palletTag && 'Pallet Tag'].filter(Boolean).join(', ')}` 
+                          ? ` + ${[qcSample && 'QC Sample', formSheet && 'Formulation Sheet', palletTag && 'Pallet Tag'].filter(Boolean).join(', ')}` 
                           : ''}
                       </Text>
                     </div>

@@ -135,17 +135,17 @@ export const TemplateSettingsModal: React.FC<TemplateSettingsModalProps> = memo(
           <Col span={12}>
             <Form.Item
               name="productKey"
-              label="Product Code"
+              label="ItemKey"
             >
-              <Input placeholder="Enter product code" />
+              <Input placeholder="Enter ItemKey" />
             </Form.Item>
           </Col>
           <Col span={12}>
             <Form.Item
               name="customerKey"
-              label="Customer Code"
+              label="CustKey"
             >
-              <Input placeholder="Enter customer code" />
+              <Input placeholder="Enter CustKey" />
             </Form.Item>
           </Col>
         </Row>
