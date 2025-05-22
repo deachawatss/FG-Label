@@ -141,7 +141,9 @@ export default function EditTemplate() {
       <RequireAuth>
         <div className="flex justify-center items-center min-h-screen">
           <div style={{ textAlign: 'center' }}>
-            <Spin size="large" tip="กำลังเตรียมข้อมูล..." />
+            <Spin size="large" spinning={true}>
+              <div style={{ padding: '50px', minHeight: '80px' }}>กำลังเตรียมข้อมูล...</div>
+            </Spin>
           </div>
         </div>
       </RequireAuth>
@@ -154,7 +156,9 @@ export default function EditTemplate() {
       <RequireAuth>
         <div className="flex justify-center items-center min-h-screen">
           <div style={{ textAlign: 'center' }}>
-            <Spin size="large" tip="กำลังโหลดข้อมูล template..." />
+            <Spin size="large" spinning={true}>
+              <div style={{ padding: '50px', minHeight: '80px' }}>กำลังโหลดข้อมูล template...</div>
+            </Spin>
           </div>
         </div>
       </RequireAuth>

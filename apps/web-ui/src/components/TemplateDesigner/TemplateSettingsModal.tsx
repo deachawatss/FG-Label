@@ -189,16 +189,14 @@ export const TemplateSettingsModal: React.FC<TemplateSettingsModalProps> = memo(
         <Row gutter={16}>
           <Col span={24}>
             <Form.Item
-              name="templateType"
-              label="Template Type"
+              name="labelType"
+              label="Label Type"
               initialValue="Standard"
-              rules={[{ required: true, message: 'Please select template type' }]}
+              rules={[{ required: true, message: 'Please select label type' }]}
             >
               <Select>
-                <Option value="Standard">Standard</Option>
-                <Option value="INNER">Inner Label</Option>
-                <Option value="OUTER">Outer Label</Option>
-                <Option value="MASTER">Master</Option>
+                <Option value="Standard">Standard Label</Option>
+                <Option value="Special">Special Label</Option>
               </Select>
             </Form.Item>
           </Col>

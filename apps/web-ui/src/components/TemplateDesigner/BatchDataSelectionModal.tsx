@@ -1245,7 +1245,9 @@ const getShipToCountry = (item: any): string => {
         />
       ) : loading && !batchDetails && !batchDataRows.length ? (
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <Spin tip="Loading batch data..." />
+          <Spin spinning={true}>
+            <div style={{ padding: '30px 0' }}>Loading batch data...</div>
+          </Spin>
         </div>
       ) : currentStep === 'select-row' ? (
         <>

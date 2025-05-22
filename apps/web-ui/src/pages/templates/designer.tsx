@@ -87,7 +87,9 @@ export default function DesignerPage() {
     return (
       <RequireAuth>
         <div className="flex justify-center items-center min-h-screen">
-          <Spin size="large" tip="กำลังเตรียมข้อมูล..." />
+          <Spin size="large" spinning={true}>
+            <div style={{ padding: '50px', minHeight: '80px' }}>กำลังเตรียมข้อมูล...</div>
+          </Spin>
         </div>
       </RequireAuth>
     );

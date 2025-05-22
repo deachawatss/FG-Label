@@ -156,7 +156,8 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
     customerKey: '',
     paperSize: '4x4',
     orientation: 'Portrait',
-    templateType: 'INNER'
+    templateType: 'INNER',
+    labelType: 'Standard'
   });
 
   // Refs for tracking statuses
@@ -309,13 +310,66 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           console.log('Starting to load initial template...');
         }
         
-        // Clear cache if necessary - only once
+        // อย่าเคลียร์ cache ก่อนโหลด! ย้ายออกไปจากตรงนี้
+        // ถ้าจำเป็นต้องเคลียร์ อย่างน้อยต้องทำแค่เมื่อ templateId เปลี่ยนเท่านั้น
+        /*
         if (initialRenderRef.current) {
           if (process.env.NODE_ENV === 'development') {
             console.log('Initial render, clearing cache');
           }
           clearCache();
           initialRenderRef.current = false;
+        }
+        */
+        
+        // Check for URL parameters
+        const { labelType, productKey, customerKey } = router.query;
+        
+        // Check if template should be loaded from localStorage based on labelType
+        if (labelType && typeof labelType === 'string') {
+          const localStorageTemplate = localStorage.getItem('batchSearchTemplate');
+          if (localStorageTemplate) {
+            try {
+              console.log(`Found template in localStorage with labelType=${labelType}`);
+              const template = JSON.parse(localStorageTemplate);
+              
+              if (template.elements && Array.isArray(template.elements)) {
+                console.log(`Loading ${template.elements.length} elements from localStorage`);
+                
+                replaceAllElements(template.elements);
+                
+                if (template.canvasSize) {
+                  resizeCanvas(template.canvasSize);
+                }
+                
+                // Update QR codes and barcodes
+                updateAllQrCodes(template.elements.filter(el => el.type === 'qr'));
+                updateAllBarcodes(template.elements.filter(el => el.type === 'barcode'));
+                
+                // Set template info with labelType from URL
+                setTemplateInfo({
+                  name: template.templateInfo?.name || `New Template ${new Date().toISOString().slice(0, 10)}`,
+                  description: template.templateInfo?.description || '',
+                  productKey: productKey as string || template.templateInfo?.productKey || '',
+                  customerKey: customerKey as string || template.templateInfo?.customerKey || '',
+                  paperSize: template.templateInfo?.paperSize || '4x4',
+                  orientation: template.templateInfo?.orientation || 'Portrait',
+                  templateType: template.templateInfo?.templateType || 'Standard',
+                  labelType: labelType as 'Standard' | 'Special'
+                });
+                
+                // Clear localStorage after loading
+                localStorage.removeItem('batchSearchTemplate');
+                
+                setTemplateLoaded(true);
+                templateLoadedRef.current = true;
+                return;
+              }
+            } catch (error) {
+              console.error('Error parsing template from localStorage:', error);
+              // Continue with normal loading flow
+            }
+          }
         }
 
         // ตรวจสอบว่าต้องโหลดเทมเพลตจาก API ตาม ID หรือไม่
@@ -342,6 +396,16 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
               
               setTemplateLoaded(true);
               templateLoadedRef.current = true;
+              
+              // ถ้าจำเป็นต้องเคลียร์ cache ให้ทำหลังจากโหลดเสร็จ
+              if (initialRenderRef.current) {
+                if (process.env.NODE_ENV === 'development') {
+                  console.log('Clearing cache after template load completed');
+                }
+                // clearCache(); // ถ้าจำเป็นต้องเคลียร์ ให้เอาคอมเมนต์ออก
+                initialRenderRef.current = false;
+              }
+              
               return;
             }
           } catch (err) {
@@ -376,9 +440,16 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
             updateAllBarcodes(initialTemplate.elements.filter(el => el.type === 'barcode'));
             
             // Set templateInfo from initialTemplate
-            if (initialTemplate.templateInfo) {
-              setTemplateInfo(initialTemplate.templateInfo);
-            }
+            setTemplateInfo({
+              name: initialTemplate.name || '',
+              description: initialTemplate.description || '',
+              productKey: initialTemplate.productKey || '',
+              customerKey: initialTemplate.customerKey || '',
+              paperSize: initialTemplate.paperSize || '4x4',
+              orientation: initialTemplate.orientation || 'Portrait',
+              templateType: initialTemplate.templateType || 'Standard',
+              labelType: initialTemplate.labelType || 'Standard'
+            });
             
             // If data comes from localStorage and batchNo is in URL parameters
             // Set batchAppliedRef to prevent calling again
@@ -431,7 +502,8 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
                   customerKey: initialTemplate.customerKey || '',
                   paperSize: initialTemplate.paperSize || '4x4',
                   orientation: initialTemplate.orientation || 'Portrait',
-                  templateType: initialTemplate.templateType || 'Standard'
+                  templateType: initialTemplate.templateType || 'Standard',
+                  labelType: initialTemplate.labelType || 'Standard'
                 });
                 
                 setTemplateLoaded(true);
@@ -1031,7 +1103,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         try {
           // นำเข้า jspdf เมื่อต้องการใช้งาน
           const { jsPDF } = await import('jspdf');
-          
+
           // ตั้งค่าคุณภาพของรูปภาพ
           const pixelRatio = 3;  // คุณภาพสูงกว่าหน้าจอ 3 เท่า - เพิ่มเป็น 3 เท่า
 
@@ -1084,7 +1156,7 @@ const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
             hotfixes: ['px_scaling'],
             compress: true
           });
-          
+
           // เพิ่มรูปภาพลงใน PDF ขนาดเท่ากับ canvas
           pdf.addImage(
             dataURL,

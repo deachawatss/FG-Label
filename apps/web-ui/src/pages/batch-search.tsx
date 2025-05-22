@@ -165,56 +165,30 @@ class DateHelper {
   shelfLifeDays?: number | null,
   daysToExpire?: number | null
 ): string {
-  if (!productionDate) {
-    return '';
-  }
-
-  try {
-    console.log('Input values:', { productionDate, shelfLifeDays, daysToExpire });
-    const prodDate = dayjs(productionDate);
-    if (!prodDate.isValid()) {
-      return '';
-    }
-    
-    console.log('Parsed production date:', prodDate.format('DD/MM/YYYY'));
-
-    // เตรียมวันเริ่มต้นที่จะใช้ในการคำนวณ - เริ่มจากวันถัดไปของวันผลิต
-    const startDate = prodDate.add(1, 'day'); // เริ่มนับจากวันถัดไป
-    console.log('Start date for calculation:', startDate.format('DD/MM/YYYY'));
-    
-    // According to calculation rules:
-    // IF {BME_LABEL.SHELFLIFE_DAY} > 0                                 THEN {@Batch Production Date}+{BME_LABEL_WIP.SHELFLIFE_DAY}
-    // IF {BME_LABEL.SHELFLIFE_DAY} = 0 and {INMAST.DaysToExpire} = 0   THEN {@Batch Production Date}+{INMAST.DaysToExpire}
-    // IF {BME_LABEL.SHELFLIFE_DAY} = 0 AND ISNULL({INMAST.DaysToExpire}) THEN {@Batch Production Date}+30
-    // ELSE {@Batch Production Date}+{BME_LABEL.SHELFLIFE_DAY}
-    
-    let resultDate = '';
-    
-    if (shelfLifeDays && shelfLifeDays > 0) {
-      // หากมีค่า shelfLifeDays และมีค่ามากกว่า 0
-      resultDate = startDate.add(shelfLifeDays - 1, 'day').format('DD/MM/YYYY');
-      console.log(`Calculated with shelfLifeDays (${shelfLifeDays}):`, resultDate);
-    } else if (shelfLifeDays === 0 && daysToExpire === 0) {
-      // หากทั้ง shelfLifeDays และ daysToExpire เป็น 0
-      resultDate = startDate.add(daysToExpire - 1, 'day').format('DD/MM/YYYY');
-      console.log(`Calculated with daysToExpire (${daysToExpire}):`, resultDate);
-    } else if (shelfLifeDays === 0 && daysToExpire === null) {
-      // หากไม่มีค่า shelfLifeDays และไม่มีค่า daysToExpire (null)
-      resultDate = startDate.add(29, 'day').format('DD/MM/YYYY'); // 30 - 1 = 29 days
-      console.log('Calculated with default (30 days):', resultDate);
-    } else {
-      // กรณีอื่นๆ
-      resultDate = startDate.add((shelfLifeDays || 0) - 1, 'day').format('DD/MM/YYYY');
-      console.log(`Calculated with fallback (${shelfLifeDays || 0}):`, resultDate);
-    }
-    
-    console.log('Final Best Before date:', resultDate);
-    return resultDate;
-  } catch (error) {
-    console.error('Error calculating best before date:', error);
-    return '';
-    }
-  }
+  if (!productionDate) return '';
+  
+  const prod = dayjs(productionDate);
+  if (!prod.isValid()) return '';
+  
+  const shelf = Number(shelfLifeDays) || 0;     // ถ้า NaN -> 0
+  const expire = Number(daysToExpire) || 0;     // ถ้า NaN -> 0
+  
+  // business-rule
+  // 1) ถ้ามี shelfLifeDays (>0) ใช้อันนี้
+  // 2) ถ้าไม่มีและ daysToExpire (>0) ใช้ daysToExpire
+  // 3) ถ้าไม่มีอะไรเลย default = 30
+  const plusDays =
+    shelf > 0 ? shelf :
+    expire > 0 ? expire :
+    30;
+  
+  // คำนวณวันที่แล้วแปลงเป็นรูปแบบ ISO
+  const resultDate = prod.add(plusDays, 'day');
+  const isoDate = resultDate.format('YYYY-MM-DD');
+  
+  // ใช้ฟังก์ชัน formatDate เพื่อแปลงเป็นรูปแบบ "02 Nov 2025"
+  return DateHelper.formatDate(isoDate);
+}
 }
 
 /**
@@ -253,6 +227,47 @@ class ApiHelper {
     }
     
     return headers;
+  }
+
+  /**
+   * Look up template by product key and customer key with label type
+   */
+  static async lookupTemplate(
+    productKey: string,
+    customerKey = '',
+    labelType: 'Standard' | 'Special' = 'Standard'
+  ): Promise<any> {
+    try {
+      // สร้าง URL สำหรับค้นหา template
+      const apiUrl = `${ApiHelper.getApiBaseUrl()}/templates/lookup?productKey=${encodeURIComponent(productKey)}${customerKey ? `&customerKey=${encodeURIComponent(customerKey)}` : ''}&labelType=${labelType}`;
+      console.log(`Looking up template (${labelType}) by product and customer:`, apiUrl);
+      
+      const headers = ApiHelper.getAuthHeaders();
+      const response = await axios.get(apiUrl, { headers });
+      
+      // ถ้าพบ templateId ให้โหลด template ข้อมูลเต็ม
+      if (response.data && response.data.templateID) {
+        console.log(`Found ${labelType} template ID:`, response.data.templateID);
+        
+        // โหลดข้อมูล template เต็มรูปแบบ
+        const templateUrl = `${ApiHelper.getApiBaseUrl()}/templates/${response.data.templateID}`;
+        const templateResponse = await axios.get(templateUrl, { headers });
+        return templateResponse.data;
+      }
+      
+      return null;
+    } catch (error) {
+      // ถ้าไม่พบ (404) หรือ parameter ไม่ถูกต้อง (400) ถือว่าเป็นเรื่องปกติ ไม่ถือเป็นข้อผิดพลาด
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 404 || error.response?.status === 400) {
+          console.log(`No ${labelType} template found for this product/customer combination or invalid parameters`);
+          return null;
+        }
+      }
+      
+      console.error(`Error looking up ${labelType} template:`, error);
+      return null;
+    }
   }
 }
 
@@ -401,32 +416,49 @@ const extractBatchData = (record: any): Batch => {
   // Production Date และ Expiry Date
   const productionDate = getRecordValue('productionDate') || getRecordValue('ProductionDate') || '';
   let expiryDate = getRecordValue('bestBeforeDate') || getRecordValue('BEST BEFORE') || '';
+  let bestBeforeDate = '';
   
   // คำนวณ Best Before Date ถ้าไม่มีข้อมูล
   if (!expiryDate && productionDate) {
     try {
       // ใช้ DateHelper.calculateBestBefore แทนการคำนวณแบบเดิม
-      const shelfLifeDays = parseInt(getRecordValue('shelfLifeDays') || getRecordValue('SHELFLIFE_DAY') || '540', 10);
-      const daysToExpire = parseInt(getRecordValue('DaysToExpire') || '0', 10);
-      expiryDate = DateHelper.calculateBestBefore(productionDate, shelfLifeDays, daysToExpire);
+      const shelfLifeRaw = getRecordValue('SHELFLIFE_DAY') || getRecordValue('shelfLifeDays');
+      const shelfLifeDays = Number.isFinite(Number(shelfLifeRaw)) ? parseInt(shelfLifeRaw, 10) : 0;
+      const daysToExpire = Number(getRecordValue('DaysToExpire')) || 0;
+
+      const bestBefore = DateHelper.calculateBestBefore(productionDate, shelfLifeDays, daysToExpire);
       
-      // แปลงจากรูปแบบ DD/MM/YYYY เป็น YYYY-MM-DD สำหรับเก็บในตัวแปร expiryDate
-      if (expiryDate) {
-        const parts = expiryDate.split('/');
-        if (parts.length === 3) {
-          expiryDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      // กำหนดค่า bestBeforeDate ที่ได้จากการคำนวณ
+      bestBeforeDate = bestBefore;
+      
+      // แปลงจากรูปแบบ DD/MM/YY เป็น YYYY-MM-DD สำหรับเก็บในตัวแปร expiryDate ถ้าจำเป็น
+      if (bestBefore) {
+        try {
+          // แปลงจากรูปแบบ "02 Nov 2025" เป็น "YYYY-MM-DD"
+          const dateObj = new Date(bestBefore);
+          if (!isNaN(dateObj.getTime())) {
+            const year = dateObj.getFullYear();
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            expiryDate = `${year}-${month}-${day}`;
+          }
+        } catch (e) {
+          console.error('Error converting date format:', e);
         }
       }
       
       console.log('Calculated expiry date:', expiryDate);
+      console.log('Calculated best before date:', bestBeforeDate);
     } catch (e) {
       console.error('Error calculating expiry date:', e);
     }
+  } else {
+    // ใช้ฟังก์ชัน formatDate เพื่อรูปแบบวันที่ที่ถูกต้อง "06 May 2025" (เฉพาะกรณีที่มีค่า expiryDate อยู่แล้ว)
+    bestBeforeDate = DateHelper.formatDate(getRecordValue('bestBeforeDate') || expiryDate || getRecordValue('BEST BEFORE'));
   }
   
   // ใช้ฟังก์ชัน formatDate เพื่อรูปแบบวันที่ที่ถูกต้อง "06 May 2025"
   const lotDate = DateHelper.formatDate(getRecordValue('lotDate') || getRecordValue('LOT CODE') || productionDate);
-  const bestBeforeDate = DateHelper.formatDate(getRecordValue('bestBeforeDate') || expiryDate || getRecordValue('BEST BEFORE'));
   
   // Lot code (จากตัวอย่างในรูป 843308)
   let lotCode = getRecordValue('lotCode') || getRecordValue('LOT CODE') || '';
@@ -489,7 +521,7 @@ const extractBatchData = (record: any): Batch => {
   
   // ข้อมูลเพิ่มเติม
   const expiryDateCaption = getRecordValue('EXPIRYDATECAP') || 'BEST BEFORE';
-  const countryOfOrigin = getRecordValue('COUNTRYOFORIGIN') || '';
+  const countryOfOrigin = getRecordValue('SHIPTO_COUNTRY') || getRecordValue('ShipToCountry') || getRecordValue('shipToCountry') || getRecordValue('COUNTRYOFORIGIN') || '';
   const totalBags = parseInt(getRecordValue('TotalBags') || '1', 10);
   
   // ตรวจสอบและแก้ไขค่า allergensLabel เพื่อไม่ให้เกิด "Allergens : Allergens :" ซ้ำกัน
@@ -520,7 +552,10 @@ const extractBatchData = (record: any): Batch => {
     prodOrderNo,
     productionDate,
     expiryDate,
-    shelfLifeDays: parseInt(getRecordValue('shelfLifeDays') || getRecordValue('SHELFLIFE_DAY') || '540', 10),
+    shelfLifeDays: (() => {
+      const shelfLifeRaw = getRecordValue('SHELFLIFE_DAY') || getRecordValue('shelfLifeDays');
+      return Number.isFinite(Number(shelfLifeRaw)) ? parseInt(shelfLifeRaw, 10) : 0;
+    })(),
     palletNo,
     bagNo,
     bagSequence: Math.round(parseInt(getRecordValue('bagSequence') || '0') || 0),
@@ -528,7 +563,7 @@ const extractBatchData = (record: any): Batch => {
     printCount: Math.round(parseInt(getRecordValue('printCount') || '0') || 0),
     printDate: new Date().toISOString().split('T')[0],
     totalBags,
-    daysToExpire: parseInt(getRecordValue('DaysToExpire') || '0', 10),
+    daysToExpire: Number(getRecordValue('DaysToExpire')) || 0,
     expiryDateCaption,
     manufacturerInfo,
     batchWithPallet: `${batchNo} ${lineCode}`,
@@ -1065,9 +1100,9 @@ const BatchSearch: React.FC<{}> = () => {
         return;
       }
       
-      // แก้ไข URL จาก batches/search เป็น batches/labelview เพื่อให้ตรงกับ API ที่มีอยู่ในระบบ
+      // เปลี่ยน endpoint เป็น /batches/sqlview เพื่อให้ตรงกับ BatchDataSelectionModal
       const apiUrl = `${ApiHelper.getApiBaseUrl()}/batches/labelview?batchNo=${encodeURIComponent(searchQuery)}`;
-      console.log('Fetching from API URL:', apiUrl);
+      console.log('Fetching from SQL View API URL:', apiUrl);
       
       // ใช้ headers ที่มี Authorization
       const headers = ApiHelper.getAuthHeaders();
@@ -1077,17 +1112,13 @@ const BatchSearch: React.FC<{}> = () => {
       console.log('API response:', response);
       
       if (response.data && Array.isArray(response.data)) {
-        // กรองข้อมูลที่ซ้ำกันออก โดยใช้ batchNo เป็นเกณฑ์
-        const uniqueData = response.data.filter((item, index, self) =>
-          index === self.findIndex((t) => t.batchNo === item.batchNo)
-        );
-        
-        const processedData = uniqueData.map(batch => extractBatchData(batch));
+        // ไม่กรองข้อมูลที่ซ้ำกันออกเพื่อให้แสดงทุก row
+        const processedData = response.data.map(batch => extractBatchData(batch));
         setBatches(processedData);
         console.log('Processed batches:', processedData);
         
-        // ถ้ามีข้อมูลเพียงรายการเดียว ให้แสดง preview และเตรียมพิมพ์อัตโนมัติ
-        if (processedData.length === 1) {
+        // แสดง preview และเตรียมพิมพ์อัตโนมัติเมื่อพบข้อมูล
+        if (processedData.length > 0) {
           handleAutoPreviewAndPrint(processedData[0]);
         }
       } else if (response.data) {
@@ -1097,7 +1128,7 @@ const BatchSearch: React.FC<{}> = () => {
         console.log('Processed single batch:', processedData);
         
         // แสดง preview และเตรียมพิมพ์อัตโนมัติ
-        if (processedData.length === 1) {
+        if (processedData.length > 0) {
           handleAutoPreviewAndPrint(processedData[0]);
         }
       } else {
@@ -1217,43 +1248,66 @@ const BatchSearch: React.FC<{}> = () => {
       
       setLoadingPreview(true);
       
-      // 1. ลำดับการค้นหา template:
-      // 1.1. ค้นหาตาม productKey + customerKey
-      // 1.2. ค้นหาตาม productKey อย่างเดียว
-      // 1.3. ค้นหาตาม templateId ถ้ามี
-      // 1.4. สร้าง standard template ถ้าไม่พบ template ใด ๆ
+      // ตรวจสอบประเภทฉลากที่ต้องการ (Standard หรือ Special)
+      const labelTypeWanted: 'Standard' | 'Special' = 
+        (qcSample || formSheet || palletTag) ? 'Special' : 'Standard';
       
-      let template = null;
+      console.log(`Label type wanted: ${labelTypeWanted}`);
       
-      // 1.1. ค้นหาตาม productKey + customerKey
-      if (batch.itemKey && batch.custKey) {
-        console.log(`Searching template by productKey (${batch.itemKey}) and customerKey (${batch.custKey})`);
-        template = await loadTemplateByProductAndCustomer(batch.itemKey, batch.custKey);
-      }
+      let template: any = null;
       
-      // 1.2. ค้นหาตาม productKey อย่างเดียวถ้ายังไม่พบ
-      if (!template && batch.itemKey) {
-        console.log(`Searching template by productKey (${batch.itemKey}) only`);
-        template = await loadTemplateByProductAndCustomer(batch.itemKey);
-      }
-      
-      // 1.3. ค้นหาตาม templateId ถ้ายังไม่พบและมี templateId
-      if (!template && batch.templateId) {
-        console.log(`Searching template by templateId (${batch.templateId})`);
-        try {
-          template = await loadTemplateById(batch.templateId);
-        } catch (error) {
-          console.error('Error loading template by ID:', error);
+      if (labelTypeWanted === 'Standard') {
+        // 1. ลำดับการค้นหา Standard Template:
+        // 1.1. ค้นหาตาม productKey + customerKey แบบ Standard
+        // 1.2. ค้นหาตาม productKey อย่างเดียวแบบ Standard
+        // 1.3. ค้นหาตาม templateId ถ้ามี
+        // 1.4. สร้าง standard template ถ้าไม่พบ template ใด ๆ
+        
+        if (batch.itemKey && batch.custKey) {
+          console.log(`Searching standard template by productKey (${batch.itemKey}) and customerKey (${batch.custKey})`);
+          template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Standard');
         }
-      }
-      
-      // 1.4. สร้าง standard template ถ้าไม่พบ template ใด ๆ
-      if (!template) {
-        console.log('No template found, creating standard template');
-        template = createStandardTemplate(batch);
-        message.info('Using standard template');
+        
+        if (!template && batch.itemKey) {
+          console.log(`Searching standard template by productKey (${batch.itemKey}) only`);
+          template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Standard');
+        }
+        
+        if (!template && batch.templateId) {
+          console.log(`Searching template by templateId (${batch.templateId})`);
+          try {
+            template = await loadTemplateById(batch.templateId);
+          } catch (error) {
+            console.error('Error loading template by ID:', error);
+          }
+        }
+        
+        if (!template) {
+          console.log('No standard template found, creating standard template');
+          template = createStandardTemplate(batch);
+          message.info('Using standard template');
+        } else {
+          message.success('Standard template loaded successfully');
+        }
       } else {
-        message.success('Template loaded successfully');
+        // ค้นหา Special Template เท่านั้น (ไม่ทำ fallback เป็น standard)
+        if (batch.itemKey && batch.custKey) {
+          console.log(`Searching special template by productKey (${batch.itemKey}) and customerKey (${batch.custKey})`);
+          template = await ApiHelper.lookupTemplate(batch.itemKey, batch.custKey, 'Special');
+        }
+        
+        if (!template && batch.itemKey) {
+          console.log(`Searching special template by productKey (${batch.itemKey}) only`);
+          template = await ApiHelper.lookupTemplate(batch.itemKey, '', 'Special');
+        }
+        
+        if (!template) {
+          message.error('No special label template found for this product/customer');
+          setLoadingPreview(false);
+          return;
+        } else {
+          message.success('Special template loaded successfully');
+        }
       }
       
       // สร้าง HTML preview
@@ -1261,37 +1315,6 @@ const BatchSearch: React.FC<{}> = () => {
       const previewHtml = generatePreviewHtml(canvasWidth, canvasHeight, batch);
       setTemplatePreview(previewHtml);
       
-      // ถ้าพบ template จาก API ให้บันทึกข้อมูลลงใน localStorage
-      // เพื่อให้หน้า designer สามารถนำไปใช้ต่อได้
-      if (template && template !== createStandardTemplate(batch)) {
-        try {
-          // สร้าง content object จาก template
-          const contentObj = TemplateHelper.safeParseContent(template);
-          
-          if (contentObj && contentObj.elements) {
-            console.log(`createElementsFromPreview สำหรับ templateId ที่มีอยู่แล้ว, elements: (${contentObj.elements.length}) ${JSON.stringify(contentObj.elements.map(e => ({ id: e.id, type: e.type })))}`);
-            
-            // บันทึกลงใน localStorage
-            localStorage.setItem('batchSearchTemplate', JSON.stringify({
-              elements: contentObj.elements,
-              canvasSize: contentObj.canvasSize || { width: 400, height: 400 },
-              templateInfo: {
-                name: template.name || `Auto-${batch.batchNo}-${new Date().toISOString().slice(0, 10)}`,
-                description: template.description || '',
-                productKey: batch.itemKey || '',
-                customerKey: batch.custKey || '',
-                paperSize: template.paperSize || '4x4',
-                orientation: template.orientation || 'Portrait',
-                templateType: template.templateType || 'INNER'
-              }
-            }));
-            
-            console.log('เก็บข้อมูล template ใน localStorage เรียบร้อย ด้วย key: batchSearchTemplate สำหรับ templateId ที่มีอยู่แล้ว');
-          }
-        } catch (error) {
-          console.error('Error saving template to localStorage:', error);
-        }
-      }
     } catch (error) {
       console.error('Error preparing preview:', error);
       message.error('Failed to prepare label preview');
@@ -1313,39 +1336,29 @@ const BatchSearch: React.FC<{}> = () => {
         productionDate: selectedProductionDate
       };
       
-      // คำนวณวันหมดอายุใหม่ตาม logic เดิม
-      if (selectedProductionDate) {
-        console.log('Calculating best before with production date:', selectedProductionDate);
-        
-        // ใช้ DateHelper.calculateBestBefore เพื่อคำนวณวันหมดอายุ
-        // ฟังก์ชันนี้จะคืนค่าในรูปแบบ DD/MM/YYYY
-        const bestBeforeDate = DateHelper.calculateBestBefore(
-          selectedProductionDate,
-          selectedBatch.shelfLifeDays,
-          selectedBatch.daysToExpire
-        );
-        
-        console.log('Calculated bestBeforeDate (DD/MM/YYYY):', bestBeforeDate);
-        
-        if (bestBeforeDate) {
-          // กำหนดค่า bestBeforeDate ในรูปแบบ "06 May 2025" โดยใช้ DateHelper.formatDate
-          // แปลงจากรูปแบบ DD/MM/YYYY เป็น YYYY-MM-DD ก่อน แล้วใช้ DateHelper.formatDate
-          const parts = bestBeforeDate.split('/');
-          if (parts.length === 3) {
-            const expiryDateISO = `${parts[2]}-${parts[1]}-${parts[0]}`;
-            newBatch.expiryDate = expiryDateISO;
-            
-            // ใช้ DateHelper.formatDate เพื่อแปลงเป็นรูปแบบ "06 May 2025"
-            newBatch.bestBeforeDate = DateHelper.formatDate(expiryDateISO);
-            
-            console.log('Updated expiryDate (YYYY-MM-DD):', newBatch.expiryDate);
-            console.log('Updated bestBeforeDate (formatted):', newBatch.bestBeforeDate);
-          } else {
-            // ถ้าไม่สามารถแยกส่วนได้ ใช้ค่าเดิม
-            newBatch.bestBeforeDate = bestBeforeDate;
-            console.log('Using original bestBeforeDate:', bestBeforeDate);
-          }
+      // คำนวณวันที่ Best Before โดยใช้ DateHelper.calculateBestBefore
+      const bestBefore = DateHelper.calculateBestBefore(
+        selectedProductionDate,
+        Number.isFinite(Number(newBatch.shelfLifeDays)) ? newBatch.shelfLifeDays : 0,
+        Number.isFinite(Number(newBatch.daysToExpire)) ? newBatch.daysToExpire : 0
+      );
+      console.log('Calculated bestBefore:', bestBefore);
+      
+      // อัปเดตค่าในตัวแปร newBatch
+      newBatch.bestBeforeDate = bestBefore;
+      
+      // แปลงวันที่ bestBefore เป็นรูปแบบ YYYY-MM-DD สำหรับเก็บในตัวแปร expiryDate
+      try {
+        // แปลงจากรูปแบบ "02 Nov 2025" เป็น "YYYY-MM-DD"
+        const dateObj = new Date(bestBefore);
+        if (!isNaN(dateObj.getTime())) {
+          const year = dateObj.getFullYear();
+          const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+          const day = String(dateObj.getDate()).padStart(2, '0');
+          newBatch.expiryDate = `${year}-${month}-${day}`;
         }
+      } catch (e) {
+        console.error('Error converting date format:', e);
       }
       
       // คำนวณ lotCode ใหม่ถ้าจำเป็น (ถ้า lotCode สร้างจาก productionDate)
@@ -2971,16 +2984,6 @@ const BatchSearch: React.FC<{}> = () => {
                     render: (text) => <Text strong>{text}</Text>,
               },
               {
-                    title: 'Product',
-                dataIndex: 'productKey',
-                    render: (text, record) => (
-                      <div>
-                        <div><Text strong>{text}</Text></div>
-                        <div><Text type="secondary" ellipsis>{record.productName}</Text></div>
-                      </div>
-                    ),
-              },
-              {
                 title: 'Production Date',
                 dataIndex: 'productionDate',
                 render: (date) => DateHelper.formatDateTime(date) || '-',
@@ -2992,14 +2995,26 @@ const BatchSearch: React.FC<{}> = () => {
                 render: (bags) => <Text strong>{bags}</Text>,
               },
               {
+                title: 'ItemKey',
+                dataIndex: 'itemKey',
+                render: (text) => <Text strong>{text || '-'}</Text>,
+              },
+              {
+                title: 'CustKey',
+                dataIndex: 'custKey',
+                render: (text) => <Text strong>{text || '-'}</Text>,
+              },
+              {
+                title: 'Ship To Country',
+                dataIndex: 'countryOfOrigin',
+                render: (text) => text 
+                  ? <Text strong style={{ color: '#1890ff' }}>{text}</Text> 
+                  : <Text type="secondary">-</Text>,
+              },
+              {
                     title: 'Template Name',
                     dataIndex: 'templateName',
                     render: (text) => <Text>{text || '-'}</Text>,
-              },
-              {
-                    title: 'Version',
-                    dataIndex: 'templateVersion',
-                    render: (version) => <Text>{version || '-'}</Text>,
               },
               {
                     title: 'Last Update',
@@ -3064,104 +3079,44 @@ const BatchSearch: React.FC<{}> = () => {
               key="edit"
               icon={<EditOutlined />}
               onClick={() => {
-                if (selectedBatch?.templateId) {
-                  // กรณีมี templateId อยู่แล้ว 
+                if (selectedBatch && selectedBatch.templateId) {
+                  // ไปที่หน้า Template Designer โดยใช้ ID ของ template
                   try {
-                    // สร้าง elements หากมีการแสดง preview อยู่แล้ว
-                    if (templatePreview) {
-                      // สร้าง object ที่มีข้อมูล template ในรูปแบบที่ TemplateDesigner เข้าใจ
-                      const elements = createElementsFromPreview();
-                      console.log('createElementsFromPreview สำหรับ templateId ที่มีอยู่แล้ว, elements:', elements);
-                      
-                      const template = {
+                    // ก่อนที่จะไปยังหน้า Template Designer ให้เก็บข้อมูล elements ของ preview ลงใน localStorage
+                    const elements = createElementsFromPreview();
+                    
+                    if (elements.length > 0) {
+                      // สร้าง template ใหม่ที่มาจากข้อมูล elements ใน preview
+                      const previewTemplate = {
+                        name: selectedBatch.templateName || `Template-${selectedBatch.batchNo}`,
+                        description: `Auto-generated from batch ${selectedBatch.batchNo}`,
+                        productKey: selectedBatch.itemKey || selectedBatch.productKey,
+                        customerKey: selectedBatch.custKey,
+                        paperSize: '4x4',
+                        orientation: 'Portrait',
+                        templateType: 'Standard',
+                        labelType: 'Standard',
                         elements: elements,
                         canvasSize: { width: 400, height: 400 }
                       };
                       
-                      // เก็บข้อมูล template ใน localStorage
-                      localStorage.setItem('batchSearchTemplate', JSON.stringify(template));
-                      console.log('เก็บข้อมูล template ใน localStorage เรียบร้อย ด้วย key: batchSearchTemplate สำหรับ templateId ที่มีอยู่แล้ว');
-                    }
-                    
-                    // นำทางไปยังหน้า designer พร้อมกับ templateId และบอกให้โหลดข้อมูล batch
-                    router.push({
-                      pathname: `/templates/designer/${selectedBatch.templateId}`,
-                      query: { 
-                        batchNo: selectedBatch.batchNo,
-                        syncBatch: 'true', // บอกให้ซิงค์ข้อมูล batch
-                        initialTemplate: 'true', // เพิ่ม parameter นี้เพื่อให้โหลด template จาก localStorage
-                        productKey: selectedBatch.productKey,
-                        customerKey: selectedBatch.custKey,
-                        showQR: generateQRCode ? 'true' : 'false' // ส่งค่า showQR ตามการตั้งค่า generateQRCode
-                      }
-                    });
-                  } catch (error) {
-                    console.error('Error preparing template with existing templateId:', error);
-                    message.error('เกิดข้อผิดพลาดในการเตรียมเทมเพลต');
-                  }
-                } else {
-                  // กรณีไม่มี templateId ให้สร้างเทมเพลตใหม่
-                  try {
-                    // เก็บข้อมูล batch ไว้ใน localStorage
-                    if (typeof window !== 'undefined' && selectedBatch) {
-                      // เก็บ batch number
-                      localStorage.setItem('tempBatchNo', selectedBatch.batchNo);
+                      // เก็บข้อมูล preview template ลงใน localStorage
+                      localStorage.setItem('batchSearchTemplate', JSON.stringify(previewTemplate));
                       
-                      // เก็บข้อมูลสำคัญอื่นๆ
-                      const batchDetails = {
-                        batchNo: selectedBatch.batchNo,
-                        productKey: selectedBatch.productKey || selectedBatch.itemKey,
-                        productName: selectedBatch.productName,
-                        customerKey: selectedBatch.custKey,
-                        netWeight: selectedBatch.netWeight,
-                        processCell: selectedBatch.processCell,
-                        lotCode: selectedBatch.lotCode,
-                        lotDate: selectedBatch.lotDate,
-                        bestBeforeDate: selectedBatch.bestBeforeDate,
-                        allergensLabel: selectedBatch.allergensLabel,
-                        storageCondition: selectedBatch.storageCondition,
-                        totalBags: selectedBatch.totalBags
-                      };
-                      localStorage.setItem('batchDetails', JSON.stringify(batchDetails));
-                      
-                      // สร้าง elements หากมีการแสดง preview อยู่แล้ว
-                      if (templatePreview) {
-                        // สร้าง object ที่มีข้อมูล template ในรูปแบบที่ TemplateDesigner เข้าใจ
-                        const elements = createElementsFromPreview();
-                        console.log('createElementsFromPreview ทำงาน, elements:', elements);
-                        
-                        const template = {
-                          elements: elements,
-                          canvasSize: { width: 400, height: 400 }
-                        };
-                        
-                        // เก็บข้อมูล template ใน localStorage
-                        localStorage.setItem('batchSearchTemplate', JSON.stringify(template));
-                        console.log('เก็บข้อมูล template ใน localStorage เรียบร้อย ด้วย key: batchSearchTemplate');
+                      // ถ้ามี templateId ให้ไปที่หน้า Template Designer ด้วย id ของ template
+                      if (selectedBatch.templateId) {
+                        router.push(`/templates/designer?id=${selectedBatch.templateId}&batchNo=${selectedBatch.batchNo}&labelType=Standard&productKey=${selectedBatch.itemKey || selectedBatch.productKey || ''}&customerKey=${selectedBatch.custKey || ''}`);
                       } else {
-                        console.log('templatePreview ไม่มีข้อมูล, ไม่สามารถสร้าง elements ได้');
+                        // ถ้าไม่มี templateId ให้ไปที่หน้า Template Designer แบบสร้างใหม่ด้วยข้อมูลจาก localStorage
+                        router.push(`/templates/designer?batchNo=${selectedBatch.batchNo}&labelType=Standard&productKey=${selectedBatch.itemKey || selectedBatch.productKey || ''}&customerKey=${selectedBatch.custKey || ''}`);
                       }
-                      
-                      message.success('กำลังเปิดเครื่องมือสร้างเทมเพลต...');
-                      
-                      // นำทางไปยังหน้า designer พร้อมส่งพารามิเตอร์
-                      router.push({
-                        pathname: '/templates/designer',
-                        query: { 
-                          batchNo: selectedBatch.batchNo,
-                          syncBatch: 'true',
-                          initialTemplate: 'true',
-                          productKey: selectedBatch.productKey || selectedBatch.itemKey,
-                          customerKey: selectedBatch.custKey || '',
-                          showQR: generateQRCode ? 'true' : 'false' // ส่งค่า showQR ตามการตั้งค่า generateQRCode
-                        }
-                      });
                     } else {
-                      message.info('ไม่สามารถสร้างเทมเพลตใหม่ได้');
+                      // ถ้าไม่สามารถสร้าง elements ได้ ให้ไปที่หน้า Template Designer ด้วย id ของ template แบบเดิม
+                      router.push(`/templates/designer?id=${selectedBatch.templateId}`);
                     }
                   } catch (error) {
-                    console.error('Error preparing template:', error);
-                    message.error('เกิดข้อผิดพลาดในการเตรียมเทมเพลต');
+                    console.error('Error preparing template for edit:', error);
+                    message.error('Failed to prepare template for editing');
                   }
                 }
               }}

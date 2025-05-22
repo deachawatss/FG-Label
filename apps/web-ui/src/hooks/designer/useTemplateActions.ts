@@ -100,7 +100,7 @@ export const useTemplateActions = () => {
         console.warn(`Content size (${contentJson.length}) exceeds recommended limit, applying compression...`);
         // ลดรายละเอียดของ element ที่ไม่จำเป็น
         const simplifiedElements = elementsWithZIndex.map(el => {
-          // เก็บเฉพาะข้อมูลที่จำเป็น
+          // เก็บเฉพาะข้อมูลที่จำเป็นพื้นฐาน
           const essential = {
             id: el.id,
             type: el.type,
@@ -108,18 +108,24 @@ export const useTemplateActions = () => {
             y: Math.round(el.y),
             width: Math.round(el.width),
             height: Math.round(el.height),
-            layer: el.layer
+            layer: el.layer,
+            visible: el.visible, // จำเป็นสำหรับ Sidebar
+            locked: el.locked,   // จำเป็นสำหรับ Sidebar
+            rotation: el.rotation, // จำเป็นสำหรับ renderer
           };
           
-          // เพิ่มข้อมูลเฉพาะตาม type
+          // เพิ่มข้อมูลเฉพาะตาม type - รักษา field ที่ renderer/Sidebar ใช้จริง
           if (el.type === 'text') {
             return {
               ...essential,
               text: el.text,
               fontSize: el.fontSize,
               fontFamily: el.fontFamily,
+              fontWeight: (el as any).fontWeight, // สำคัญ! ต้องเก็บไว้
+              fontStyle: (el as any).fontStyle,   // สำคัญ! ต้องเก็บไว้ 
               fill: el.fill,
-              align: el.align
+              align: el.align,
+              textDecoration: (el as any).textDecoration // สำคัญสำหรับขีดเส้นใต้ ฯลฯ
             };
           }
           else if (el.type === 'barcode') {
@@ -127,19 +133,63 @@ export const useTemplateActions = () => {
               ...essential,
               value: el.value,
               format: el.format,
-              displayValue: el.displayValue
+              displayValue: el.displayValue, // สำคัญ! ต้องเก็บไว้
+              lineColor: (el as any).lineColor,      // สำคัญสำหรับสีของ barcode
+              background: (el as any).background     // สำคัญสำหรับพื้นหลัง
             };
           }
           else if (el.type === 'qr') {
+            // รองรับ type 'qr'
             return {
               ...essential,
-              value: el.value
+              value: el.value,
+              foreground: (el as any).foreground, // สีของ QR code
+              background: (el as any).background, // สีพื้นหลัง
+              level: (el as any).level // ระดับการแก้ไขข้อผิดพลาด
+            };
+          }
+          else if ((el.type as string) === 'qrcode') {
+            // รองรับ type 'qrcode'
+            return {
+              ...essential,
+              value: (el as any).value,
+              foreground: (el as any).foreground,
+              background: (el as any).background,
+              level: (el as any).level
             };
           }
           else if (el.type === 'image') {
             // keep data-URL; if unbelievably large the DBA should store
             // images externally and keep only URL – don't silently strip.
-            return { ...essential, src: el.src };
+            return { 
+              ...essential, 
+              src: el.src,
+              preserveAspectRatio: (el as any).preserveAspectRatio // สำคัญสำหรับการรักษาอัตราส่วน
+            };
+          }
+          else if (el.type === 'rect') {
+            return {
+              ...essential,
+              fill: el.fill,
+              stroke: (el as any).stroke,
+              strokeWidth: (el as any).strokeWidth,
+              cornerRadius: el.cornerRadius
+            };
+          }
+          else if (el.type === 'line') {
+            return {
+              ...essential,
+              points: (el as any).points,
+              stroke: (el as any).stroke,
+              strokeWidth: (el as any).strokeWidth,
+              lineCap: (el as any).lineCap
+            };
+          }
+          else if (el.type === 'group') {
+            return {
+              ...essential,
+              children: (el as any).children // เก็บ children elements ของ group
+            };
           }
           
           return essential;
@@ -152,6 +202,7 @@ export const useTemplateActions = () => {
         };
         
         finalContent = JSON.stringify(compressedContent);
+        console.log(`Compressed content size: ${finalContent.length} (reduced by ${contentJson.length - finalContent.length} bytes)`);
       }
       
       // เตรียมข้อมูลตามโครงสร้างของตาราง LabelTemplate
@@ -163,7 +214,8 @@ export const useTemplateActions = () => {
         engine: 'Canvas', // ใช้ engine 'Canvas' สำหรับ designer ใหม่
         paperSize: templateInfo.paperSize || '4x4',
         orientation: templateInfo.orientation || 'Portrait',
-        templateType: templateInfo.templateType || 'INNER',
+        templateType: templateInfo.templateType || 'Standard', // ใช้ templateType เป็นค่าเดิม (ไม่ต้องแก้ไข)
+        labelType: templateInfo.labelType || 'Standard', // เพิ่ม labelType ที่ได้จาก TemplateInfo
         content: finalContent,
         customWidth: canvasSize.width,
         customHeight: canvasSize.height,
@@ -369,8 +421,8 @@ export const useTemplateActions = () => {
           content.elements = [];
         }
         
-        // ส่งผลลัพธ์กลับ
-        return {
+        // ข้อมูลที่จะส่งกลับ
+        const result = {
           templateInfo: {
             name: initialTemplate.name || 'Unnamed Template',
             description: initialTemplate.description || '',
@@ -378,11 +430,16 @@ export const useTemplateActions = () => {
             customerKey: initialTemplate.customerKey || initialTemplate.CustomerKey || '',
             paperSize: initialTemplate.paperSize || initialTemplate.PaperSize || '4x4',
             orientation: initialTemplate.orientation || initialTemplate.Orientation || 'Portrait',
-            templateType: initialTemplate.templateType || initialTemplate.TemplateType || 'Standard'
+            templateType: initialTemplate.templateType || initialTemplate.TemplateType || 'Standard',
+            labelType: initialTemplate.labelType || initialTemplate.LabelType || 'Standard'
           },
           elements: content?.elements || [],
           canvasSize: content?.canvasSize || { width: 400, height: 400 }
         };
+        
+        // สำคัญ: เมื่อใช้ข้อมูลจาก cache ให้ยกเลิกการเรียก API
+        setIsLoading(false);
+        return result;
       }
       
       // ถ้าไม่มี initialTemplate ให้เรียก API ตามปกติ
@@ -454,7 +511,8 @@ export const useTemplateActions = () => {
           customerKey: template.customerKey || template.CustomerKey || '',
           paperSize: template.paperSize || template.PaperSize || '4x4',
           orientation: template.orientation || template.Orientation || 'Portrait',
-          templateType: template.templateType || template.TemplateType || 'Standard'
+          templateType: template.templateType || template.TemplateType || 'Standard',
+          labelType: template.labelType || template.LabelType || 'Standard'
         },
         elements: content?.elements || [],
         canvasSize: content?.canvasSize || { width: 400, height: 400 }

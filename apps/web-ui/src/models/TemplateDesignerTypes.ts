@@ -103,6 +103,9 @@ export interface CanvasSize {
   height: number;
 }
 
+// Define label types
+export type LabelType = 'Standard' | 'Special';
+
 export interface TemplateInfo {
   name: string;
   description: string;
@@ -111,6 +114,7 @@ export interface TemplateInfo {
   paperSize: string;
   orientation: 'Portrait' | 'Landscape';
   templateType: string;
+  labelType: LabelType;
 }
 
 export interface Point {
