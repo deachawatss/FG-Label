@@ -6,7 +6,7 @@ namespace FgLabel.Api.Services
     public interface ITemplateService
     {
         Task<int> GetMappingForBatchAsync(string batchNo);
-        Task<int> AutoCreateTemplateAsync(AutoCreateRequest request);
+        Task<int> AutoCreateTemplateAsync(AutoCreateRequest request, string? createdBy = null);
         Task<int> SaveTemplateAsync(CreateTemplateRequest request);
         Task<bool> DeleteTemplateAsync(int templateId);
         

@@ -310,7 +310,9 @@ export const useTemplateActions = () => {
             return data;
           } else {
             const errorData = await postResponse.json().catch(() => ({}));
-            throw new Error(errorData.message || postResponse.statusText);
+            const errorMessage = errorData.message || errorData.error || `HTTP ${postResponse.status}: ${postResponse.statusText}`;
+            console.error('API Error Response:', errorData);
+            throw new Error(errorMessage);
           }
         }
       } else {
@@ -346,7 +348,9 @@ export const useTemplateActions = () => {
           return data;
         } else {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error('Template is corrupted. Please create a new template');
+          const errorMessage = errorData.message || errorData.error || `HTTP ${response.status}: ${response.statusText}`;
+          console.error('API Error Response:', errorData);
+          throw new Error(errorMessage);
         }
       }
     } catch (error: any) {

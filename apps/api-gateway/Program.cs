@@ -52,6 +52,8 @@ public record LabelTemplate
     public bool Active { get; set; } = true;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? UpdatedBy { get; set; }
     public List<LabelTemplateComponent> Components { get; set; } = new List<LabelTemplateComponent>();
     
     // สำหรับรองรับการใช้งาน with pattern
@@ -121,6 +123,28 @@ public class LabelTemplateDto
     public bool Active { get; set; } = true;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? UpdatedBy { get; set; }
+}
+
+// Define PrintLogRequest DTO
+public record PrintLogRequest
+{
+    public string BatchNo { get; init; } = string.Empty;
+    public int? StartBagNo { get; init; }
+    public int? EndBagNo { get; init; }
+    public int? TotalBags { get; init; }
+    public string? BagNo { get; init; }
+    public int? TemplateID { get; init; }
+    public int? PrinterID { get; init; }
+    public string? PrinterName { get; init; }
+    public string? ItemKey { get; init; }
+    public string? CustKey { get; init; }
+    public string? ShipToCountry { get; init; }
+    public int PrintQuantity { get; init; }
+    public string PrintStatus { get; init; } = string.Empty;
+    public string? PrintData { get; init; }
+    public string RequestedBy { get; init; } = string.Empty;
 }
 
 // เพิ่ม class LabelRendererFactory สำหรับการ render ฉลาก
@@ -128,17 +152,17 @@ public class LabelRendererFactory
 {
     private readonly ILogger<LabelRendererFactory> _logger;
     private readonly IConfiguration _configuration;
-    
+
     public LabelRendererFactory(ILogger<LabelRendererFactory> logger, IConfiguration configuration)
     {
         _logger = logger;
         _configuration = configuration;
     }
-    
+
     public ILabelRenderer CreateRenderer(string engine)
     {
         _logger.LogInformation("Creating renderer for engine: {Engine}", engine);
-        
+
         // สร้าง renderer ตามประเภทของ engine ที่กำหนด
         switch (engine?.ToLower())
         {
@@ -794,7 +818,7 @@ public class Program
                                     ProductKey = productKey,
                                     CustomerKey = customerKey ?? string.Empty  // ป้องกัน null assignment
                                 };
-                                var templateId = await templateService.AutoCreateTemplateAsync(request);
+                                var templateId = await templateService.AutoCreateTemplateAsync(request, "System");
                                 
                                 if (templateId > 0)
                                 {
@@ -897,7 +921,7 @@ public class Program
             FgLabel.Api.Models.AutoCreateRequest request,
             [FromServices] ITemplateService templateService) =>
         {
-            var templateId = await templateService.AutoCreateTemplateAsync(request);
+            var templateId = await templateService.AutoCreateTemplateAsync(request, "System");
             return Results.Ok(new { templateId });
         }).RequireAuthorization();
 
@@ -944,7 +968,7 @@ public class Program
                             ProductKey = body.ProductKey,
                             CustomerKey = body.CustomerKey
                         };
-                        templateId = await templateService.AutoCreateTemplateAsync(request);
+                        templateId = await templateService.AutoCreateTemplateAsync(request, "System");
                         
                         if (templateId <= 0)
                         {
@@ -1041,10 +1065,13 @@ public class Program
             try 
             {
                 logger.LogInformation("Retrieving all active templates");
-                var templates = (await templateRepo.GetAllActiveTemplates()).ToList();
+                
+                // ใช้ SQL query โดยตรงแทนการใช้ repository เพื่อให้แน่ใจว่าได้ข้อมูล CreatedBy และ UpdatedBy
+                var templates = await db.QueryAsync<LabelTemplateDto>(
+                    "SELECT * FROM FgL.LabelTemplate WHERE Active = 1 ORDER BY UpdatedAt DESC");
                 
                 // สร้าง list ใหม่เพื่อเก็บ templates พร้อม components
-                var result = new List<LabelTemplate>();
+                var result = new List<object>();
                 
                 // ดึงข้อมูล components สำหรับแต่ละ template
                 foreach (var tpl in templates)
@@ -1053,8 +1080,8 @@ public class Program
                         "SELECT * FROM FgL.LabelTemplateComponent WHERE TemplateID = @Id", 
                         new { Id = tpl.TemplateID });
                     
-                    // สร้าง LabelTemplate ใหม่จาก tpl
-                    var newTemplate = new LabelTemplate
+                    // สร้าง object ที่มีข้อมูลครบถ้วน
+                    var templateWithComponents = new
                     {
                         TemplateID = tpl.TemplateID,
                         Name = tpl.Name,
@@ -1069,10 +1096,12 @@ public class Program
                         Active = tpl.Active,
                         CreatedAt = tpl.CreatedAt,
                         UpdatedAt = tpl.UpdatedAt,
+                        CreatedBy = tpl.CreatedBy ?? "System",
+                        UpdatedBy = tpl.UpdatedBy ?? "System",
                         Components = components.ToList()
                     };
                     
-                    result.Add(newTemplate);
+                    result.Add(templateWithComponents);
                 }
                 
                 logger.LogInformation("Successfully retrieved {Count} templates", result.Count);
@@ -1128,6 +1157,8 @@ public class Program
                     template.Active,
                     template.CreatedAt,
                     template.UpdatedAt,
+                    template.CreatedBy,
+                    template.UpdatedBy,
                     Components = components.ToList()
                 };
                 
@@ -1175,6 +1206,8 @@ public class Program
                     tpl.Active,
                     tpl.CreatedAt,
                     tpl.UpdatedAt,
+                    tpl.CreatedBy,
+                    tpl.UpdatedBy,
                     Components = components.ToList()
                 };
                 
@@ -1348,10 +1381,13 @@ public class Program
         }
 
         /* ---------- 4.8  POST /api/templates ------------------------------- */
-        app.MapPost("/api/templates", async (HttpRequest request, IDbConnection db, ILogger<Program> logger) =>
+        app.MapPost("/api/templates", async (HttpRequest request, IDbConnection db, ILogger<Program> logger, ClaimsPrincipal user) =>
         {
             try
             {
+                // ดึง username จาก JWT token
+                var currentUser = user.Identity?.Name ?? "System";
+                
                 // Parse request body
                 var body = await new StreamReader(request.Body).ReadToEndAsync();
                 var template = JsonSerializer.Deserialize<JsonElement>(body);
@@ -1413,6 +1449,7 @@ public class Program
                             CustomerKey = @CustomerKey,
                             TemplateType = @TemplateType,
                             UpdatedAt = GETDATE(),
+                            UpdatedBy = @UpdatedBy,
                             Version = @Version,
                             Active = 1
                         WHERE TemplateID = @TemplateID;
@@ -1432,10 +1469,11 @@ public class Program
                             CustomerKey = customerKey,
                             TemplateType = templateType,
                             Version = newVersion,
+                            UpdatedBy = currentUser,
                             TemplateID = templateID
                         });
                     
-                    logger.LogInformation("Updated template ID {TemplateID}, version {Version}", (object)templateID, (object)newVersion);
+                    logger.LogInformation("Updated template ID {TemplateID}, version {Version} by user {User}", (object)templateID, (object)newVersion, currentUser);
                     
                     // อัปเดต mapping ใน table mapping ด้วย stored procedure
                     try
@@ -1466,11 +1504,11 @@ public class Program
                         INSERT INTO FgL.LabelTemplate (
                             Name, Description, ProductKey, CustomerKey, 
                             Engine, PaperSize, Orientation, Content, Version,
-                            CreatedAt, UpdatedAt, Active, TemplateType
+                            CreatedAt, UpdatedAt, CreatedBy, UpdatedBy, Active, TemplateType
                         ) VALUES (
                             @Name, @Description, @ProductKey, @CustomerKey,
                             @Engine, @PaperSize, @Orientation, @Content, 1,
-                            GETDATE(), GETDATE(), 1, @TemplateType
+                            GETDATE(), GETDATE(), @CreatedBy, @UpdatedBy, 1, @TemplateType
                         );
                         
                         SELECT SCOPE_IDENTITY() AS TemplateID, 1 AS Version;";
@@ -1485,11 +1523,13 @@ public class Program
                         PaperSize = paperSize,
                         Orientation = orientation,
                         Content = content,
-                        TemplateType = templateType
+                        TemplateType = templateType,
+                        CreatedBy = currentUser,
+                        UpdatedBy = currentUser
                     });
                     
                     var newTemplateId = (int)result.TemplateID;
-                    logger.LogInformation("Created new template ID {TemplateID}", (object)newTemplateId);
+                    logger.LogInformation("Created new template ID {TemplateID} by user {User}", (object)newTemplateId, currentUser);
                     
                     // อัปเดต mapping ใน table mapping ด้วย stored procedure
                     try
@@ -1525,33 +1565,118 @@ public class Program
             }
         }).RequireAuthorization();
 
-        /* ---------- 2.3 Create Standard Template ----------- */
-        app.MapPost("/api/templates/create-standard", async ([FromBody] FgLabel.Api.Models.AutoCreateRequest request, HttpContext httpContext, IDbConnection db, ITemplateService templateService) =>
+        /* ---------- 4.8.1  PUT /api/templates/{id} ------------------------- */
+        app.MapPut("/api/templates/{id}", async (int id, HttpRequest request, IDbConnection db, ILogger<Program> logger, ClaimsPrincipal user) =>
         {
-            if (string.IsNullOrEmpty(request.BatchNo))
-            {
-                return Results.BadRequest(new { error = "BatchNo is required" });
-            }
-
             try
             {
-                // Call the template service to create standard template
-                var templateId = await templateService.AutoCreateTemplateAsync(request);
-                if (templateId <= 0)
+                // ดึง username จาก JWT token
+                var currentUser = user.Identity?.Name ?? "System";
+                
+                // Parse request body
+                var body = await new StreamReader(request.Body).ReadToEndAsync();
+                var template = JsonSerializer.Deserialize<JsonElement>(body);
+                
+                // Extract template details
+                var name = template.GetProperty("name").GetString();
+                var description = template.TryGetProperty("description", out var descProp) ? descProp.GetString() : null;
+                var engine = template.TryGetProperty("engine", out var engineProp) ? engineProp.GetString() : "html";
+                var paperSize = template.TryGetProperty("paperSize", out var paperSizeProp) ? paperSizeProp.GetString() : "4X4";
+                var orientation = template.TryGetProperty("orientation", out var oriProp) ? oriProp.GetString() : null;
+                var productKey = template.TryGetProperty("productKey", out var prodKeyProp) ? prodKeyProp.GetString() : null;
+                var customerKey = template.TryGetProperty("customerKey", out var custKeyProp) ? custKeyProp.GetString() : null;
+                var content = template.TryGetProperty("content", out var contentProp) ? contentProp.GetString() : null;
+                var templateType = template.TryGetProperty("templateType", out var templateTypeProp) ? templateTypeProp.GetString() : 
+                                  (template.TryGetProperty("labelType", out var labelTypeProp) ? labelTypeProp.GetString() : "Standard");
+                
+                var incrementVersion = template.TryGetProperty("incrementVersion", out var incrVerProp) && incrVerProp.GetBoolean();
+                
+                if (string.IsNullOrEmpty(name))
                 {
-                    return Results.Problem("Failed to create template.");
+                    return Results.BadRequest("Template name is required");
                 }
                 
-                // Retrieve the created template
-                var savedTemplate = await db.QueryFirstOrDefaultAsync<LabelTemplateDto>(
-                    "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @Id", 
-                    new { Id = templateId });
+                // Check if template exists
+                var existingTemplate = await db.QuerySingleOrDefaultAsync<dynamic>(
+                    "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @TemplateID", 
+                    new { TemplateID = id });
                     
-                return Results.Ok(savedTemplate);
+                if (existingTemplate == null)
+                {
+                    return Results.NotFound($"Template with ID {id} not found");
+                }
+                
+                var currentVersion = (int)existingTemplate.Version;
+                var newVersion = incrementVersion ? currentVersion + 1 : currentVersion;
+                
+                var updateSql = @"
+                    UPDATE FgL.LabelTemplate SET
+                        Name = @Name, 
+                        Description = @Description, 
+                        Engine = @Engine, 
+                        PaperSize = @PaperSize, 
+                        Orientation = @Orientation,
+                        Content = @Content,
+                        ProductKey = @ProductKey,
+                        CustomerKey = @CustomerKey,
+                        TemplateType = @TemplateType,
+                        UpdatedAt = GETDATE(),
+                        UpdatedBy = @UpdatedBy,
+                        Version = @Version,
+                        Active = 1
+                    WHERE TemplateID = @TemplateID;
+                    
+                    SELECT @TemplateID AS TemplateID, @Version AS Version;";
+                    
+                var result = await db.QuerySingleAsync<dynamic>(
+                    updateSql,
+                    new {
+                        Name = name,
+                        Description = description,
+                        Engine = engine,
+                        PaperSize = paperSize,
+                        Orientation = orientation,
+                        Content = content,
+                        ProductKey = productKey,
+                        CustomerKey = customerKey,
+                        TemplateType = templateType,
+                        Version = newVersion,
+                        UpdatedBy = currentUser,
+                        TemplateID = id
+                    });
+                
+                logger.LogInformation("Updated template ID {TemplateID}, version {Version} by user {User}", (object)id, (object)newVersion, currentUser);
+                
+                // อัปเดต mapping ใน table mapping ด้วย stored procedure
+                try
+                {
+                    await db.ExecuteAsync(
+                        "FgL.UpdateTemplateMappingWithStringKeys", 
+                        new { 
+                            TemplateID = id,
+                            ProductKey = productKey,
+                            CustomerKey = customerKey
+                        },
+                        commandType: System.Data.CommandType.StoredProcedure);
+                    
+                    logger.LogInformation("Updated template mapping for template ID {TemplateID}", (object)id);
+                }
+                catch (Exception ex)
+                {
+                    // บันทึก error แต่ไม่หยุดการทำงาน เนื่องจากการอัปเดต template สำเร็จแล้ว
+                    logger.LogWarning(ex, "Error updating template mapping for ID {TemplateID}, but template update succeeded", (object)id);
+                }
+                
+                return Results.Ok(result);
             }
             catch (Exception ex)
             {
-                return Results.Problem($"Error creating standard template: {ex.Message}");
+                logger.LogError(ex, "Error updating template ID {TemplateID}: {Message}", id, ex.Message);
+                return Results.Problem(
+                    title: "Error updating template",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
             }
         }).RequireAuthorization();
 
@@ -1737,6 +1862,110 @@ public class Program
                     detail: ex.Message,
                     statusCode: 500
                 );
+            }
+        }).RequireAuthorization();
+
+        // POST: /api/print-log
+        app.MapPost("/api/print-log", async ([FromBody] PrintLogRequest log, IDbConnection db) =>
+        {
+            try
+            {
+                // ตอนนี้ RequestedBy เป็น NVARCHAR แล้ว สามารถใช้ string ได้
+                var sql = @"
+                    INSERT INTO FgL.LabelPrintJob
+                    (BatchNo, BagNo, StartBagNo, EndBagNo, TotalBags, TemplateID, PrinterID, ItemKey, CustKey, ShipToCountry, PrintQuantity, PrinterName, PrintStatus, PrintData, RequestedBy, RequestedDate)
+                    VALUES
+                    (@BatchNo, @BagNo, @StartBagNo, @EndBagNo, @TotalBags, @TemplateID, @PrinterID, @ItemKey, @CustKey, @ShipToCountry, @PrintQuantity, @PrinterName, @PrintStatus, @PrintData, @RequestedBy, GETDATE());
+                    SELECT SCOPE_IDENTITY();";
+                    
+                var id = await db.ExecuteScalarAsync<int>(sql, log);
+                
+                return Results.Ok(new { PrintJobID = id });
+            }
+            catch (Exception ex)
+            {
+                // Log error และส่งกลับ error response
+                Console.WriteLine($"Error saving print log: {ex.Message}");
+                return Results.Problem(
+                    title: "Error saving print log",
+                    detail: ex.Message,
+                    statusCode: 500
+                );
+            }
+        }).RequireAuthorization();
+
+        // GET: /api/print-log
+        app.MapGet("/api/print-log", async (IDbConnection db) =>
+        {
+            var sql = @"
+                SELECT TOP 1000 
+                    PrintJobID,
+                    BatchNo,
+                    BagNo,
+                    StartBagNo,
+                    EndBagNo,
+                    TotalBags,
+                    TemplateID,
+                    PrinterID,
+                    ItemKey,
+                    CustKey,
+                    ShipToCountry,
+                    PrintQuantity,
+                    PrinterName,
+                    PrintStatus,
+                    ErrorMessage,
+                    PrintData,
+                    RequestedBy as RequestedByUsername,
+                    RequestedDate,
+                    CompletedDate,
+                    CompletedDate as PrintedAt
+                FROM FgL.LabelPrintJob
+                ORDER BY RequestedDate DESC";
+            var logs = await db.QueryAsync(sql);
+            return Results.Ok(logs);
+        }).RequireAuthorization();
+
+        /* ---------- 4.8.2 Create Standard Template ----------- */
+        app.MapPost("/api/templates/create-standard", async ([FromBody] FgLabel.Api.Models.AutoCreateRequest request, HttpContext httpContext, IDbConnection db, ITemplateService templateService, ClaimsPrincipal user) =>
+        {
+            if (string.IsNullOrEmpty(request.BatchNo))
+            {
+                return Results.BadRequest(new { error = "BatchNo is required" });
+            }
+
+            try
+            {
+                // ดึง username จาก JWT token
+                var currentUser = user.Identity?.Name ?? "System";
+                
+                // Call the template service to create standard template
+                var templateId = await templateService.AutoCreateTemplateAsync(request, currentUser);
+                if (templateId <= 0)
+                {
+                    return Results.Problem("Failed to create template.");
+                }
+                
+                // อัปเดตข้อมูลผู้สร้างใน template ที่สร้างขึ้น
+                await db.ExecuteAsync(@"
+                    UPDATE FgL.LabelTemplate 
+                    SET CreatedBy = @CreatedBy, UpdatedBy = @UpdatedBy 
+                    WHERE TemplateID = @TemplateID",
+                    new { 
+                        CreatedBy = currentUser, 
+                        UpdatedBy = currentUser, 
+                        TemplateID = templateId 
+                    });
+                
+                // Retrieve the created template
+                var savedTemplate = await db.QueryFirstOrDefaultAsync<LabelTemplateDto>(
+                    "SELECT * FROM FgL.LabelTemplate WHERE TemplateID = @Id", 
+                    new { Id = templateId });
+                    
+                return Results.Ok(savedTemplate);
+            }
+            catch (Exception ex)
+            {
+                return Results.Problem($"Error creating standard template: {ex.Message}");
             }
         }).RequireAuthorization();
 

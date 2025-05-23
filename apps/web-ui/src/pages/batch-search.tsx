@@ -57,6 +57,7 @@ import {
   PlusOutlined,
   DownOutlined,
   ScanOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import RequireAuth from '../components/RequireAuth';
@@ -377,6 +378,7 @@ interface Batch {
   templateUpdatedAt?: string; // เพิ่มฟิลด์สำหรับวันที่อัปเดตเทมเพลตล่าสุด
   templateVersion?: number; // เพิ่มฟิลด์สำหรับเวอร์ชันเทมเพลต
   allergen1: string; // เพิ่มเพื่อแก้ไขข้อผิดพลาด linter
+  isSpecialLabel: boolean; // เพิ่ม state สำหรับตรวจสอบว่าเป็น Special Label หรือไม่
 }
 
 /* ------------------------------------------------------------------------ */
@@ -576,7 +578,8 @@ const extractBatchData = (record: any): Batch => {
     templateName: getRecordValue('TemplateName') || '',
     templateUpdatedAt: getRecordValue('TemplateUpdatedAt') || '',
     templateVersion: parseInt(getRecordValue('Version') || '0', 10) || undefined,
-    allergen1: allergen1
+    allergen1: allergen1,
+    isSpecialLabel: getRecordValue('isSpecialLabel') === 'true'
   };
 };
 
@@ -1083,13 +1086,50 @@ const BatchSearch: React.FC<{}> = () => {
       });
     }
     
-    // เรียกใช้ initQRCode
-    initQRCode();
-  }, []);
+    // เรียกใช้ initQRCode เฉพาะครั้งแรก
+    const timer = setTimeout(() => {
+      initQRCode();
+    }, 500);
+    
+    return () => clearTimeout(timer);
+  }, []); // ลบ dependency เพื่อไม่ให้เรียกซ้ำ
   
   /* ===================================================================== */
   /* API Functions */
   /* ===================================================================== */
+
+  // Add savePrintLog function
+  const savePrintLog = async (log: any) => {
+    try {
+      const apiUrl = `${ApiHelper.getApiBaseUrl()}/print-log`;
+      console.log('Attempting to save print log to:', apiUrl);
+      console.log('Print log data:', log);
+      
+      const response = await axios.post(apiUrl, log, {
+        headers: ApiHelper.getAuthHeaders(),
+      });
+      
+      console.log('Print log saved successfully:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.warn("print-log call failed – carrying on, printing is more important", error);
+      
+      // แสดงข้อความแจ้งเตือนแต่ไม่หยุดการทำงาน
+      if (error.response?.status === 404) {
+        console.warn('Print log endpoint not found (404) - continuing with print operation');
+        message.warning('Print log service unavailable, but printing will continue', 2);
+      } else if (error.response?.status === 401) {
+        console.warn('Unauthorized access to print log - continuing with print operation');
+        message.warning('Authentication issue with print log service', 2);
+      } else {
+        console.warn('Print log service error:', error.message);
+        message.warning('Print log service temporarily unavailable', 2);
+      }
+      
+      // ไม่ throw error เพื่อให้การพิมพ์ดำเนินต่อไป
+      return null;
+    }
+  };
 
   // Fetch batch data from API
   const fetchBatchData = async (searchQuery: string) => {
@@ -2056,6 +2096,25 @@ const BatchSearch: React.FC<{}> = () => {
   const handleClosePreview = () => {
     setPreviewVisible(false);
   };
+
+  
+  // Add buildPrintLog function
+  const buildPrintLog = (batch: Batch, start: number, end: number, specials: string[], username: string) => ({
+    batchNo: batch.batchNo,
+    startBagNo: start,
+    endBagNo: end,
+    totalBags: batch.totalBags,
+    bagNo: specials.length > 0 ? specials.join(', ') : `${start}-${end}`, // For special prints, log what was printed. For normal, log the range.
+    templateID: batch.templateId,
+    printerName: 'system-default', // Assuming system default printer, adjust if selectable
+    itemKey: batch.itemKey,
+    custKey: batch.custKey,
+    shipToCountry: batch.countryOfOrigin,
+    printQuantity: (end - start + 1) + specials.length, // Total labels printed
+    printStatus: 'submitted', // Or 'success' if we can confirm printing
+    printData: JSON.stringify(batch), // Storing the whole batch object as context
+    requestedBy: username,
+  });
   
   // Handle system print
   const handleSystemPrint = async () => {
@@ -2063,6 +2122,20 @@ const BatchSearch: React.FC<{}> = () => {
       message.error('No batch selected');
       return;
     }
+     // --- START: Print Log Call ---
+     const specials = [
+      ...(qcSample ? ['QC SAMPLE'] : []),
+      ...(formSheet ? ['FORMULATION SHEET'] : []),
+      ...(palletTag ? ['PALLET TAG'] : [])
+    ];
+    const payload = buildPrintLog(selectedBatch, startBag, endBag, specials, username);
+    try {
+      await savePrintLog(payload);
+    } catch (e) {
+      console.warn('print-log call failed – carrying on, printing is more important', e);
+    }
+    // --- END: Print Log Call ---
+    
     
     setIsPrinting(true);
     
@@ -2186,9 +2259,9 @@ const BatchSearch: React.FC<{}> = () => {
                 <script>
                   // สร้างการเช็คว่าไลบรารีโหลดเรียบร้อยหรือไม่
                   function checkLibrariesLoaded() {
-                    return new Promise((resolve, reject) => {
-                      let checkCount = 0;
-                      const maxChecks = 20; // ตรวจสอบสูงสุด 20 ครั้ง (10 วินาที)
+                    return new Promise(function(resolve, reject) {
+                      var checkCount = 0;
+                      var maxChecks = 20; // ตรวจสอบสูงสุด 20 ครั้ง (10 วินาที)
                       
                       function check() {
                         console.log('Checking if libraries loaded...', checkCount);
@@ -2218,26 +2291,28 @@ const BatchSearch: React.FC<{}> = () => {
                     
                     // รอให้ไลบรารีโหลดเสร็จก่อน
                     checkLibrariesLoaded()
-                      .then(() => {
+                      .then(function() {
                         console.log('JsBarcode available:', typeof window.JsBarcode !== 'undefined');
                         console.log('QRCode available:', typeof window.QRCode !== 'undefined');
                         
                         // แก้ไขฟอนต์จีนให้แสดงผลถูกต้อง
-                        document.querySelectorAll('.chinese-text').forEach(function(el) {
-                          el.style.fontFamily = "'SimSun', 'Microsoft YaHei', 'SimHei', sans-serif";
-                        });
+                        var chineseElements = document.querySelectorAll('.chinese-text');
+                        for (var i = 0; i < chineseElements.length; i++) {
+                          chineseElements[i].style.fontFamily = "'SimSun', 'Microsoft YaHei', 'SimHei', sans-serif";
+                        }
                         
                         // ฟังก์ชันสำหรับแสดง barcode ในทุกหน้า
                         function renderAllBarcodes() {
                           try {
                             console.log('Rendering barcodes and QR codes');
                             // ค้นหา barcode elements ทั้งหมด
-                            const barcodeElements = document.querySelectorAll('[id^="barcode-"]');
+                            var barcodeElements = document.querySelectorAll('[id^="barcode-"]');
                             console.log('Found barcode elements:', barcodeElements.length);
                             
-                            barcodeElements.forEach(element => {
+                            for (var i = 0; i < barcodeElements.length; i++) {
+                              var element = barcodeElements[i];
                               // ดึง batchNo จาก id
-                              const batchNo = element.id.replace('barcode-', '');
+                              var batchNo = element.id.replace('barcode-', '');
                               console.log('Rendering barcode for:', batchNo);
                               
                               // แสดง barcode
@@ -2254,28 +2329,47 @@ const BatchSearch: React.FC<{}> = () => {
                                 textMargin: 2,
                                 margin: 5
                               });
-                            });
+                            }
                             
-                            // ค้นหา QR code elements ทั้งหมด
-                            const qrElements = document.querySelectorAll('[id^="qrcode-"]');
+                            // ค้นหา QR code elements ทั้งหมด - ปรับปรุงการค้นหา
+                            var qrElements = document.querySelectorAll('canvas[id^="qrcode-"]');
                             console.log('Found QR elements:', qrElements.length);
                             
-                            qrElements.forEach(element => {
+                            for (var j = 0; j < qrElements.length; j++) {
+                              var element = qrElements[j];
+                              // ตรวจสอบว่าเป็น canvas element จริงๆ
+                              if (element.tagName.toLowerCase() !== 'canvas') {
+                                console.warn('Element is not a canvas:', element);
+                                continue;
+                              }
+                              
+                              var canvas = element;
+                              
+                              // ตรวจสอบว่า canvas มี getContext method
+                              if (typeof canvas.getContext !== 'function') {
+                                console.warn('Canvas does not have getContext method:', canvas);
+                                continue;
+                              }
+                              
                               // ดึง batchNo จาก id
-                              const batchNo = element.id.replace('qrcode-', '');
+                              var batchNo = canvas.id.replace('qrcode-', '');
                               // สร้างข้อมูลสำหรับ QR code
-                              const qrValue = element.getAttribute('data-qr-value') || batchNo;
+                              var qrValue = canvas.getAttribute('data-qr-value') || batchNo;
                               
                               console.log('Rendering QR code for:', batchNo);
                               
                               // แสดง QR code
                               if (window.QRCode) {
-                                QRCode.toCanvas(element, qrValue, {
-                                  width: 80,
-                                  margin: 1
-                                });
+                                try {
+                                  QRCode.toCanvas(canvas, qrValue, {
+                                    width: 80,
+                                    margin: 1
+                                  });
+                                } catch (qrError) {
+                                  console.error('Error rendering QR code for', batchNo, ':', qrError);
+                                }
                               }
-                            });
+                            }
                             
                             console.log('Finished rendering all codes');
                             return true;
@@ -2286,13 +2380,13 @@ const BatchSearch: React.FC<{}> = () => {
                         }
                         
                         // เรียกใช้ฟังก์ชันเพื่อแสดง barcodes และ QR codes
-                        const renderResult = renderAllBarcodes();
+                        var renderResult = renderAllBarcodes();
                         console.log('Render result:', renderResult);
                         
                         // ทำให้ฟังก์ชันนี้สามารถเรียกใช้จากภายนอกได้
                         window.renderAllBarcodes = renderAllBarcodes;
                       })
-                      .catch(err => {
+                      .catch(function(err) {
                         console.error('Failed to initialize libraries:', err);
                       });
                   }
@@ -2312,18 +2406,29 @@ const BatchSearch: React.FC<{}> = () => {
               const formattedBagNo = bagNumber.toString().padStart(2, '0');
               
               // สร้าง QR code value
-              const qrValue = `BATCH:${selectedBatch.batchNo}\nPRODUCT:${selectedBatch.productName}\nLOT:${selectedBatch.lotCode}\nNET_WEIGHT:${selectedBatch.netWeight}\nBEST_BEFORE:${selectedBatch.bestBeforeDate}\nALLERGENS:${selectedBatch.allergensLabel}`;
+              const qrValue = `BATCH:${selectedBatch.batchNo}\\nPRODUCT:${selectedBatch.productName}\\nLOT:${selectedBatch.lotCode}\\nNET_WEIGHT:${selectedBatch.netWeight}\\nBEST_BEFORE:${selectedBatch.bestBeforeDate}\\nALLERGENS:${selectedBatch.allergensLabel}`;
               
               // แทนที่ค่า bagNo ในเทมเพลต
               let labelHtml = templatePreview;
+              
+              // แทนที่ lineCode เฉพาะกรณีที่ไม่ใช่ Special Label
+              if (!isSpecialLabel) {
+                // สร้าง lineCode ใหม่สำหรับแต่ละ bag (เฉพาะ Standard Label)
+                const palletNo = selectedBatch.palletNo || '01';
+                const newLineCode = `P${palletNo}B${formattedBagNo}`;
+                
+                // แทนที่ lineCode ในตำแหน่งขวาบน (ค้นหาและแทนที่ P01B01 หรือรูปแบบคล้ายกัน)
+                labelHtml = labelHtml.replace(/P\d{2}B\d{2}/g, newLineCode);
+              }
               
               // เพิ่ม class และคุณสมบัติที่จำเป็นเพื่อให้แสดงผลถูกต้อง
               labelHtml = labelHtml.replace(/<div class="template-preview"/g, '<div class="template-preview"');
               labelHtml = labelHtml.replace(/>带卡马萨拉风味调</g, ' class="chinese-text">带卡马萨拉风味调');
               labelHtml = labelHtml.replace(/>配料表:/g, ' class="chinese-text">配料表:');
               
-              // เปลี่ยนค่า data-qr-value สำหรับ QR code
-              labelHtml = labelHtml.replace(new RegExp(`data-qr-value="[^"]*"`, 'g'), `data-qr-value="${qrValue}"`);
+              // เปลี่ยนค่า data-qr-value สำหรับ QR code - แก้ไขการ escape
+              const escapedQrValue = qrValue.replace(/"/g, '&quot;');
+              labelHtml = labelHtml.replace(new RegExp(`data-qr-value="[^"]*"`, 'g'), `data-qr-value="${escapedQrValue}"`);
               
               printHTML += `
                 <div class="label-container">
@@ -2347,12 +2452,13 @@ const BatchSearch: React.FC<{}> = () => {
                 bagSequence: bagNumber,
                 totalBags: endBag - startBag + 1,
                 bagPosition: `${bagNumber}/${endBag - startBag + 1}`,
-                lineCode: `P${palletNo}B${formattedBagNo}`, // กำหนด lineCode ใหม่ตามเลขถุง
-                generateQRCode: generateQRCode // คงสถานะการสร้าง QR Code
+                lineCode: `P${palletNo}B`, // ปรับให้เหลือแค่ base ไม่ต่อเลขถุง
+                generateQRCode: generateQRCode, // คงสถานะการสร้าง QR Code
+                isSpecialLabel: false // กำหนดให้เป็น Standard label
               };
               
               // สร้าง QR code value
-              const qrValue = `BATCH:${bagBatch.batchNo}\nPRODUCT:${bagBatch.productName}\nLOT:${bagBatch.lotCode}\nNET_WEIGHT:${bagBatch.netWeight}\nBEST_BEFORE:${bagBatch.bestBeforeDate}\nALLERGENS:${bagBatch.allergensLabel}`;
+              const qrValue = `BATCH:${bagBatch.batchNo}\\nPRODUCT:${bagBatch.productName}\\nLOT:${bagBatch.lotCode}\\nNET_WEIGHT:${bagBatch.netWeight}\\nBEST_BEFORE:${bagBatch.bestBeforeDate}\\nALLERGENS:${bagBatch.allergensLabel}`;
               
               // สร้างเทมเพลตสำหรับแต่ละถุง
               try {
@@ -2377,8 +2483,9 @@ const BatchSearch: React.FC<{}> = () => {
                   }
                 }
                 
-                // เพิ่ม data attribute สำหรับ QR code
-                labelHtml = labelHtml.replace(`id="qrcode-${bagBatch.batchNo}"`, `id="qrcode-${bagBatch.batchNo}" data-qr-value="${qrValue}"`);
+                // เพิ่ม data attribute สำหรับ QR code - แก้ไขการ escape
+                const escapedQrValue = qrValue.replace(/"/g, '&quot;');
+                labelHtml = labelHtml.replace(`id="qrcode-${bagBatch.batchNo}"`, `id="qrcode-${bagBatch.batchNo}" data-qr-value="${escapedQrValue}"`);
                 
                 printHTML += `
                   <div class="label-container">
@@ -2515,23 +2622,23 @@ const BatchSearch: React.FC<{}> = () => {
       const lotDate = batch.lotDate || '';
       
       // รับค่า bagNo และ totalBags จาก batch
-      const bagNo = batch.bagNo || '1';
+      const bagSequence = Number(batch.bagSequence) || Number(batch.bagNo) || 1;
+      const bagNo = batch.bagNo || bagSequence.toString();
       const totalBags = batch.totalBags || 1;
-      const bagSequence = batch.bagSequence || 1;
       
       // ตรวจสอบและปรับปรุง lineCode (P01Bxx) ตามเลขถุง
-      // ถ้า bagNo เป็นตัวเลข ให้สร้าง lineCode ใหม่ตามรูปแบบที่ถูกต้อง
+      // ถ้าเป็น Standard label (templatePreview ว่างหรือไม่มี special template) ให้ต่อเลขถุง
       let lineCode = '';
-      
-      // ถ้ามี lineCode ในข้อมูล batch ให้ใช้ค่านั้นเป็นฐาน
       const baseLineCode = batch.lineCode || 'P01B';
-      
-      // ถ้า baseLineCode มีรูปแบบ PxxB แล้ว ให้เอาแค่ส่วน PxxB
       const lineCodeBase = baseLineCode.match(/P\d{2}B/) ? baseLineCode.match(/P\d{2}B/)[0] : 'P01B';
-      
-      // ปรับเลขถุงให้เป็นรูปแบบ 01, 02, ..
       const formattedBagNo = bagSequence.toString().padStart(2, '0');
-      lineCode = `${lineCodeBase}${formattedBagNo}`;
+
+      // เฉพาะ Standard label เท่านั้นที่ต่อเลขถุง
+      if (!batch.isSpecialLabel) {
+        lineCode = `${lineCodeBase}${formattedBagNo}`;
+      } else {
+        lineCode = batch.lineCode || '';
+      }
       
       // ใช้ค่า bestBeforeDate จาก batch โดยตรง
       const bestBeforeDate = batch.bestBeforeDate || '';
@@ -2682,12 +2789,15 @@ const BatchSearch: React.FC<{}> = () => {
       // เพิ่ม QR code ถ้าต้องการ พร้อม script สำหรับแสดง QR code
       const shouldGenerateQRCode = batch.generateQRCode || generateQRCode;
       if (shouldGenerateQRCode) {
+        // สร้าง QR code value ที่ถูกต้อง
+        const qrCodeData = `BATCH:${batchNo}\\nPRODUCT:${batch.productName}\\nLOT:${lotCode}\\nNET_WEIGHT:${netWeight}\\nBEST_BEFORE:${bestBeforeDate}\\nALLERGENS:${allergensLabel}`;
+        
         const qrScript = `
           <script>
             setTimeout(function() {
               try {
                 if (window.QRCode) {
-                  const qrValue = "BATCH:${batchNo}\\nPRODUCT:${batch.productName}\\nLOT:${lotCode}\\nNET_WEIGHT:${netWeight}\\nBEST_BEFORE:${bestBeforeDate}\\nALLERGENS:${allergensLabel}";
+                  var qrValue = "${qrCodeData}";
                   
                   // สร้าง QR Code
                   QRCode.toCanvas(document.getElementById("qrcode-${batchNo}"), qrValue, {
@@ -2697,7 +2807,7 @@ const BatchSearch: React.FC<{}> = () => {
                   });
                   
                   // เพิ่ม event listener สำหรับการคลิกที่ QR Code
-                  const qrContainer = document.getElementById("qrcode-container-${batchNo}");
+                  var qrContainer = document.getElementById("qrcode-container-${batchNo}");
                   if (qrContainer) {
                     qrContainer.onclick = function() {
                       // เรียกใช้ฟังก์ชัน handleQrCodeScanned ที่ถูกกำหนดในหน้าหลัก
@@ -2789,10 +2899,12 @@ const BatchSearch: React.FC<{}> = () => {
     // ตรวจสอบว่าเราอยู่ในฝั่ง browser
     if (typeof window === 'undefined') return;
     
+    console.log('initQRCode called');
+    
     // ตรวจสอบว่า JsBarcode ถูกโหลดแล้วหรือยัง และทำการเรียกใช้เพื่อแสดง barcode
     if (typeof window.JsBarcode !== 'undefined') {
-      // ค้นหา elements ที่มี class เป็น barcode
-      const barcodeElements = document.querySelectorAll('.barcode');
+      // ค้นหา elements ที่มี id ขึ้นต้นด้วย barcode-
+      const barcodeElements = document.querySelectorAll('svg[id^="barcode-"]');
       console.log('Found barcode elements:', barcodeElements.length);
       
       barcodeElements.forEach((element) => {
@@ -2837,12 +2949,13 @@ const BatchSearch: React.FC<{}> = () => {
           }
           
           // ตรวจสอบว่า barcode ถูกสร้างขึ้นแล้ว
-          console.log(`Barcode for ${batchNo} rendered with options:`, options);
+          console.log(`Barcode for ${batchNo} rendered successfully`);
         } catch (e) {
           console.error(`Error rendering barcode for ${batchNo}:`, e);
         }
       });
     } else {
+      console.log('JsBarcode not loaded, attempting to load...');
       // ถ้ายังไม่ถูกโหลดให้ลองโหลดจาก module
       try {
         import('jsbarcode').then(jsbarcodeModule => {
@@ -2861,6 +2974,7 @@ const BatchSearch: React.FC<{}> = () => {
     
     // ตรวจสอบว่า QRCode ถูกโหลดแล้วหรือยัง
     if (typeof window.QRCode === 'undefined') {
+      console.log('QRCode not loaded, attempting to load...');
       // ถ้ายังไม่ถูกโหลดให้ลองโหลดจาก module
       try {
         import('qrcode').then(qrcodeModule => {
@@ -2869,7 +2983,7 @@ const BatchSearch: React.FC<{}> = () => {
           
           // เมื่อโหลด QRCode สำเร็จแล้ว ให้ตรวจสอบและแสดง QR codes ที่อาจมีอยู่ในหน้าจอ
           setTimeout(() => {
-            const qrElements = document.querySelectorAll('[id^="qrcode-"]');
+            const qrElements = document.querySelectorAll('canvas[id^="qrcode-"]');
             console.log('Found QR elements after load:', qrElements.length);
             
             qrElements.forEach(element => {
@@ -2886,7 +3000,7 @@ const BatchSearch: React.FC<{}> = () => {
                 // สร้างข้อมูลสำหรับ QR code
                 const qrValueFromAttribute = canvas.getAttribute('data-qr-value') || `BATCH:${batchNo}`;
                 
-                console.log('Rendering QR code for:', batchNo, 'with value:', qrValueFromAttribute);
+                console.log('Rendering QR code for:', batchNo);
                 
                 // แสดง QR code
                 window.QRCode.toCanvas(canvas, qrValueFromAttribute, {
@@ -2901,43 +3015,6 @@ const BatchSearch: React.FC<{}> = () => {
           }, 500);
         }).catch(err => {
           console.error('Failed to load QRCode library:', err);
-          
-          // ถ้าไม่สามารถโหลดได้ ให้สร้าง placeholder แทน
-          window.QRCode = {
-            toCanvas: (canvas: HTMLCanvasElement, text: string, options: any) => {
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                // วาด placeholder QR code
-                ctx.fillStyle = 'white';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'black';
-                ctx.fillRect(10, 10, canvas.width - 20, canvas.height - 20);
-                
-                // วาดลายตาราง
-                ctx.fillStyle = 'white';
-                const cellSize = Math.floor((canvas.width - 20) / 8);
-                for (let i = 0; i < 8; i++) {
-                  for (let j = 0; j < 8; j++) {
-                    if ((i + j) % 2 === 0) {
-                      ctx.fillRect(
-                        10 + i * cellSize, 
-                        10 + j * cellSize, 
-                        cellSize, 
-                        cellSize
-                      );
-                    }
-                  }
-                }
-                
-                // เขียนข้อความตรงกลาง
-                ctx.fillStyle = 'black';
-                ctx.font = 'bold 10px Arial';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('QR Placeholder', canvas.width / 2, canvas.height / 2);
-              }
-            }
-          };
         });
       } catch (e) {
         console.error('Error initializing QRCode:', e);
@@ -2945,7 +3022,7 @@ const BatchSearch: React.FC<{}> = () => {
     } else {
       // หากมี QRCode แล้ว ให้ตรวจสอบและแสดง QR codes ที่อาจมีอยู่ในหน้าจอ
       setTimeout(() => {
-        const qrElements = document.querySelectorAll('[id^="qrcode-"]');
+        const qrElements = document.querySelectorAll('canvas[id^="qrcode-"]');
         console.log('Found QR elements with existing library:', qrElements.length);
         
         qrElements.forEach(element => {
@@ -2962,7 +3039,7 @@ const BatchSearch: React.FC<{}> = () => {
             // สร้างข้อมูลสำหรับ QR code
             const qrValueFromAttribute = canvas.getAttribute('data-qr-value') || `BATCH:${batchNo}`;
             
-            console.log('Rendering QR code for:', batchNo, 'with value:', qrValueFromAttribute);
+            console.log('Rendering QR code for:', batchNo);
             
             // แสดง QR code
             window.QRCode.toCanvas(canvas, qrValueFromAttribute, {
@@ -3055,20 +3132,17 @@ const BatchSearch: React.FC<{}> = () => {
   // เรียกใช้ setupQrScanner เมื่อคอมโพเนนต์โหลดเสร็จ
   useEffect(() => {
     setupQrScanner();
-    
-    // ทำการเรียกใช้ initQRCode เมื่อคอมโพเนนต์โหลดเสร็จ
-    initQRCode();
   }, []);
   
   // เรียกใช้ initQRCode เมื่อมีการเปลี่ยนแปลงค่า templatePreview
   useEffect(() => {
-    if (templatePreview && previewVisible) {
+    if (templatePreview && printModalVisible) {
       console.log('templatePreview changed, calling initQRCode');
       setTimeout(() => {
         initQRCode();
       }, 300);
     }
-  }, [templatePreview, previewVisible]);
+  }, [templatePreview, printModalVisible]);
 
   /* ------------------------------------------------------------------------ */
   /* Helper - Create Elements From Preview                                        */
@@ -3452,7 +3526,7 @@ const BatchSearch: React.FC<{}> = () => {
       return [];
     }
   };
-
+  
   // เพิ่มส่วนแสดง QR popup ในส่วน return
   return (
     <Layout style={{ minHeight: '100vh', backgroundColor: '#f5f5f5' }}>
@@ -3749,7 +3823,7 @@ const BatchSearch: React.FC<{}> = () => {
                       }
                     } else {
                       // ถ้าไม่สามารถสร้าง elements ได้ ให้ไปที่หน้า Template Designer ด้วย id ของ template แบบเดิม
-                      router.push(`/templates/designer?id=${selectedBatch.templateId}`);
+                        router.push(`/templates/designer?id=${selectedBatch.templateId}`);
                     }
                   } catch (error) {
                     console.error('Error preparing template for edit:', error);
@@ -3819,25 +3893,73 @@ const BatchSearch: React.FC<{}> = () => {
                     <Divider style={{ margin: '16px 0' }} />
                     
                     <div>
-                      <Text strong>Bag Range:</Text>
+                      <Text strong style={{ fontSize: '16px' }}>Bag Range:</Text>
                       <div style={{ marginTop: 8 }}>
                         <Space>
-                          <InputNumber 
-                            min={1} 
-                            max={selectedBatch.totalBags} 
-                            value={startBag} 
-                            onChange={(value) => setStartBag(value || 1)}
-                            addonBefore="From"
-                            style={{ width: 120 }}
-                          />
-                          <InputNumber 
-                            min={startBag} 
-                            max={selectedBatch.totalBags} 
-                            value={endBag} 
-                            onChange={(value) => setEndBag(value || startBag)}
-                            addonBefore="To"
-                            style={{ width: 120 }}
-                          />
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ marginRight: 8, fontSize: '14px' }}>From</span>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                              <InputNumber 
+                                min={1} 
+                                max={selectedBatch.totalBags} 
+                                value={startBag} 
+                                onChange={(value) => setStartBag(value || 1)}
+                                style={{ width: 80 }}
+                                controls={false}
+                              />
+                              <div style={{ marginLeft: '8px', display: 'flex', flexDirection: 'column' }}>
+                                <Button
+                                  size="large"
+                                  icon={<UpOutlined />}
+                                  onClick={() => {
+                                    const newValue = Math.min(selectedBatch.totalBags || 1, startBag + 1);
+                                    setStartBag(newValue);
+                                  }}
+                                  style={{ marginBottom: '4px' }}
+                                />
+                                <Button
+                                  size="large"
+                                  icon={<DownOutlined />}
+                                  onClick={() => {
+                                    const newValue = Math.max(1, startBag - 1);
+                                    setStartBag(newValue);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ marginRight: 8, fontSize: '14px' }}>To</span>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                              <InputNumber 
+                                min={startBag} 
+                                max={selectedBatch.totalBags} 
+                                value={endBag} 
+                                onChange={(value) => setEndBag(value || startBag)}
+                                style={{ width: 80 }}
+                                controls={false}
+                              />
+                              <div style={{ marginLeft: '8px', display: 'flex', flexDirection: 'column' }}>
+                                <Button
+                                  size="large"
+                                  icon={<UpOutlined />}
+                                  onClick={() => {
+                                    const newValue = Math.min(selectedBatch.totalBags || 1, endBag + 1);
+                                    setEndBag(newValue);
+                                  }}
+                                  style={{ marginBottom: '4px' }}
+                                />
+                                <Button
+                                  size="large"
+                                  icon={<DownOutlined />}
+                                  onClick={() => {
+                                    const newValue = Math.max(startBag, endBag - 1);
+                                    setEndBag(newValue);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </div>
                         </Space>
                       </div>
                       <div style={{ marginTop: 8, display: 'flex', alignItems: 'center' }}>
@@ -3847,30 +3969,44 @@ const BatchSearch: React.FC<{}> = () => {
                             setStartBag(1);
                             setEndBag(selectedBatch.totalBags || 1);
                           }}
-                          style={{ marginRight: 16 }}
+                          style={{ marginRight: 16, fontSize: '14px' }}
                         >
                           All Bags
                         </Button>
                         <div>
                           <Tooltip title="Generate QR code with batch data">
                             <Space align="start" direction="vertical">
-                              <Space>
+                              <div style={{ display: 'flex', alignItems: 'center' }}>
                                 <input 
                                   type="checkbox" 
                                   checked={generateQRCode} 
                                   onChange={(e) => setGenerateQRCode(e.target.checked)}
                                   id="generate-qrcode"
-                                  disabled={isSpecialLabel} // ปิดการใช้งานถ้าเป็น Special Label
+                                  disabled={isSpecialLabel}
+                                  style={{ 
+                                    width: '32px', 
+                                    height: '32px',
+                                    cursor: isSpecialLabel ? 'not-allowed' : 'pointer',
+                                    margin: 0
+                                  }}
                                 />
                                 <label 
                                   htmlFor="generate-qrcode"
-                                  style={{ color: isSpecialLabel ? '#d9d9d9' : 'inherit' }}
+                                  style={{ 
+                                    color: isSpecialLabel ? '#d9d9d9' : 'inherit',
+                                    fontSize: '16px',
+                                    cursor: isSpecialLabel ? 'not-allowed' : 'pointer',
+                                    marginLeft: '10px',
+                                    lineHeight: '22px',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                  }}
                                 >
                                   Generate QR Code
                                 </label>
-                              </Space>
+                              </div>
                               {isSpecialLabel && (
-                                <Text type="secondary" style={{ fontSize: '12px' }}>
+                                <Text type="secondary" style={{ fontSize: '13px' }}>
                                   QR code generation is disabled for Special Labels
                                 </Text>
                               )}
@@ -3883,43 +4019,97 @@ const BatchSearch: React.FC<{}> = () => {
                     <Divider style={{ margin: '16px 0' }} />
                     
                     <div>
-                      <Text strong>Special Labels:</Text>
+                      <Text strong style={{ fontSize: '16px' }}>Special Labels:</Text>
                       <div style={{ marginTop: 8 }}>
                         <Space direction="vertical" style={{ width: '100%' }}>
                           <Tooltip title="QC Sample labels have black bottoms with white text">
-                            <Space>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
                               <input 
                                 type="checkbox" 
                                 checked={qcSample} 
                                 onChange={(e) => setQcSample(e.target.checked)}
                                 id="qc-sample"
+                                style={{ 
+                                  width: '32px', 
+                                  height: '32px',
+                                  cursor: 'pointer',
+                                  margin: 0
+                                }}
                               />
-                              <label htmlFor="qc-sample">QC Sample</label>
-                            </Space>
+                              <label 
+                                htmlFor="qc-sample"
+                                style={{ 
+                                  fontSize: '16px',
+                                  cursor: 'pointer',
+                                  marginLeft: '10px',
+                                  lineHeight: '22px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                              >
+                                QC Sample
+                              </label>
+                            </div>
                           </Tooltip>
                           
                           <Tooltip title="Formula Sheet labels for batch documentation">
-                            <Space>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
                               <input 
                                 type="checkbox" 
                                 checked={formSheet} 
                                 onChange={(e) => setFormSheet(e.target.checked)}
                                 id="formula-sheet"
+                                style={{ 
+                                  width: '32px', 
+                                  height: '32px',
+                                  cursor: 'pointer',
+                                  margin: 0
+                                }}
                               />
-                              <label htmlFor="formula-sheet">Formulation Sheet</label>
-                            </Space>
+                              <label 
+                                htmlFor="formula-sheet"
+                                style={{ 
+                                  fontSize: '16px',
+                                  cursor: 'pointer',
+                                  marginLeft: '10px',
+                                  lineHeight: '22px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                              >
+                                Formulation Sheet
+                              </label>
+                            </div>
                           </Tooltip>
                           
                           <Tooltip title="Pallet Tags labels for identifying pallets">
-                            <Space>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
                               <input 
                                 type="checkbox" 
                                 checked={palletTag} 
                                 onChange={(e) => setPalletTag(e.target.checked)}
                                 id="pallet-tag"
+                                style={{ 
+                                  width: '32px', 
+                                  height: '32px',
+                                  cursor: 'pointer',
+                                  margin: 0
+                                }}
                               />
-                              <label htmlFor="pallet-tag">Pallet Tags</label>
-                            </Space>
+                              <label 
+                                htmlFor="pallet-tag"
+                                style={{ 
+                                  fontSize: '16px',
+                                  cursor: 'pointer',
+                                  marginLeft: '10px',
+                                  lineHeight: '22px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                              >
+                                Pallet Tags
+                              </label>
+                            </div>
                           </Tooltip>
                         </Space>
                       </div>

@@ -1341,3 +1341,60 @@ GO
 ---------------------------------------------------------------------------*/
 PRINT N'✅  FG-Label schema rev J1-keep installed successfully (support for multiple CustKeys per BatchNo)';
 GO 
+
+/*==============================================================================
+  PATCH: Change RequestedBy from INT to NVARCHAR(50) in LabelPrintJob
+  DATE : 23-May-2025
+==============================================================================*/
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+-- 1) Alter the column data type
+ALTER TABLE FgL.LabelPrintJob
+    ALTER COLUMN RequestedBy NVARCHAR(250) NULL;
+GO
+
+PRINT N'★ Patch applied: RequestedBy is now NVARCHAR(50) in FgL.LabelPrintJob';
+GO
+/*==============================================================================
+  POST-J1 PATCH: Fix RequestedBy print & Add UpdatedBy to LabelTemplate
+  DATE : 23-May-2025
+==============================================================================*/
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+-- 1) Correct the PRINT to match NVARCHAR(250)
+PRINT N'★ Patch applied: RequestedBy is now NVARCHAR(250) in FgL.LabelPrintJob';
+GO
+
+-- 2) Add or alter the UpdatedBy column on LabelTemplate (to store usernames)
+IF COL_LENGTH('FgL.LabelTemplate','UpdatedBy') IS NOT NULL
+BEGIN
+    ALTER TABLE FgL.LabelTemplate
+        ALTER COLUMN UpdatedBy NVARCHAR(100) NULL;
+    PRINT N'★ Altered UpdatedBy to NVARCHAR(100) in FgL.LabelTemplate';
+END
+ELSE
+BEGIN
+    ALTER TABLE FgL.LabelTemplate
+        ADD UpdatedBy NVARCHAR(100) NULL;
+    PRINT N'★ Added UpdatedBy NVARCHAR(100) to FgL.LabelTemplate';
+END
+GO
+
+-- 3) (Re)create a nonclustered index on UpdatedBy for faster queries
+IF EXISTS (
+    SELECT 1
+      FROM sys.indexes
+     WHERE object_id = OBJECT_ID('FgL.LabelTemplate')
+       AND name = 'IX_LabelTemplate_UpdatedBy'
+)
+    DROP INDEX IX_LabelTemplate_UpdatedBy ON FgL.LabelTemplate;
+GO
+
+CREATE NONCLUSTERED INDEX IX_LabelTemplate_UpdatedBy
+    ON FgL.LabelTemplate(UpdatedBy);
+PRINT N'★ Created IX_LabelTemplate_UpdatedBy';
+GO

@@ -10,6 +10,8 @@ namespace FgLabel.Api.Models
         public string? ProductKey { get; set; }
         public string? CustomerKey { get; set; }
         public string? ProductName { get; set; }
+        public string? CustomerName { get; set; }
+        public string? BagNo { get; set; }
         public int? TotalBags { get; set; }
         public DateTime? ProductionDate { get; set; }
         public DateTime? ExpiryDate { get; set; }

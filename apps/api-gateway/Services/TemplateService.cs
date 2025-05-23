@@ -42,11 +42,23 @@ namespace FgLabel.Api.Services
                 // Create default template if batch not found
                 var defaultTemplateId = await connection.ExecuteScalarAsync<int>(
                     @"INSERT INTO FgL.LabelTemplate (
-                        ProductKey, CustomerKey, Active, CreatedAt
+                        Name, ProductKey, CustomerKey, Active, Engine, PaperSize, Orientation, TemplateType, CreatedAt, UpdatedAt, CreatedBy, UpdatedBy
                       ) VALUES (
-                        NULL, NULL, 1, GETUTCDATETIME()
+                        @Name, @ProductKey, @CustomerKey, @Active, @Engine, @PaperSize, @Orientation, @TemplateType, GETUTCDATETIME(), GETUTCDATETIME(), @CreatedBy, @UpdatedBy
                       );
-                      SELECT SCOPE_IDENTITY();");
+                      SELECT SCOPE_IDENTITY();", new
+                    {
+                        Name = $"Default-{batchNo}",
+                        ProductKey = (string?)null,
+                        CustomerKey = (string?)null,
+                        Active = true,
+                        Engine = "Canvas",
+                        PaperSize = "4x4",
+                        Orientation = "Portrait",
+                        TemplateType = "Standard",
+                        CreatedBy = "System",
+                        UpdatedBy = "System"
+                    });
 
                 _logger.LogInformation("Created default template {TemplateId} for batch {BatchNo}",
                     defaultTemplateId, batchNo);
@@ -97,12 +109,23 @@ namespace FgLabel.Api.Services
             // Create new template
             var newTemplateId = await connection.ExecuteScalarAsync<int>(
                 @"INSERT INTO FgL.LabelTemplate (
-                    ProductKey, CustomerKey, Active, CreatedAt
+                    Name, ProductKey, CustomerKey, Active, Engine, PaperSize, Orientation, TemplateType, CreatedAt, UpdatedAt, CreatedBy, UpdatedBy
                   ) VALUES (
-                    @ProductKey, @CustomerKey, 1, GETUTCDATETIME()
+                    @Name, @ProductKey, @CustomerKey, @Active, @Engine, @PaperSize, @Orientation, @TemplateType, GETUTCDATETIME(), GETUTCDATETIME(), @CreatedBy, @UpdatedBy
                   );
                   SELECT SCOPE_IDENTITY();",
-                new { batch.ProductKey, batch.CustomerKey });
+                new { 
+                    Name = $"New-{batchNo}",
+                    ProductKey = batch.ProductKey, 
+                    CustomerKey = batch.CustomerKey,
+                    Active = true,
+                    Engine = "Canvas",
+                    PaperSize = "4x4",
+                    Orientation = "Portrait",
+                    TemplateType = "Standard",
+                    CreatedBy = "System",
+                    UpdatedBy = "System"
+                });
 
             _logger.LogInformation("Created new template {TemplateId} for batch {BatchNo}",
                 newTemplateId, batchNo);
@@ -232,11 +255,11 @@ namespace FgLabel.Api.Services
             }
         }
 
-        public async Task<int> AutoCreateTemplateAsync(AutoCreateRequest request)
+        public async Task<int> AutoCreateTemplateAsync(AutoCreateRequest request, string? createdBy = null)
         {
             try
             {
-                _logger.LogInformation("เริ่มสร้าง template อัตโนมัติสำหรับ BatchNo: {BatchNo}", request.BatchNo);
+                _logger.LogInformation("เริ่มสร้าง template อัตโนมัติสำหรับ BatchNo: {BatchNo} โดย {CreatedBy}", request.BatchNo, createdBy ?? "System");
                 
                 // 1. ตรวจสอบว่ามี batch ที่ระบุหรือไม่
                 var batchSql = @"SELECT * FROM FgL.vw_Label_PrintSummary WHERE BatchNo = @BatchNo";
@@ -260,150 +283,49 @@ namespace FgLabel.Api.Services
                     BatchNo = batchDict.ContainsKey("BatchNo") ? batchDict["BatchNo"]?.ToString() : request.BatchNo
                 };
                 
-                // ดึงข้อมูล product และ customer จากฐานข้อมูล
-                string? productKey = null;
-                string? productName = null;
-                string? customerKey = null;
-                
-                // ลองดึงข้อมูลจาก ItemKeyResolved ก่อน แล้วค่อยใช้ ItemKey เป็นตัวสำรอง
-                if (batchDict.TryGetValue("ItemKeyResolved", out var resolvedProdKey) && resolvedProdKey != null)
+                // ดึงข้อมูลจาก dictionary และใส่ลงใน DTO
+                if (batchDict.ContainsKey("ProductName"))
+                    batchDto.ProductName = batchDict["ProductName"]?.ToString();
+                if (batchDict.ContainsKey("ItemKey"))
+                    batchDto.ProductKey = batchDict["ItemKey"]?.ToString();
+                if (batchDict.ContainsKey("CustKey"))
+                    batchDto.CustomerKey = batchDict["CustKey"]?.ToString();
+                if (batchDict.ContainsKey("CustomerName"))
+                    batchDto.CustomerName = batchDict["CustomerName"]?.ToString();
+                if (batchDict.ContainsKey("BagNo"))
+                    batchDto.BagNo = batchDict["BagNo"]?.ToString();
+                if (batchDict.ContainsKey("ProductionDate"))
                 {
-                    productKey = resolvedProdKey!.ToString();
-                    _logger.LogInformation("ใช้ค่า ItemKeyResolved: {ItemKey}", productKey);
-                }
-                else if (batchDict.TryGetValue("ItemKey", out var prodKey) && prodKey != null)
-                {
-                    productKey = prodKey!.ToString();
-                    _logger.LogInformation("ใช้ค่า ItemKey: {ItemKey}", productKey);
-                }
-                
-                // ดึงชื่อสินค้า
-                if (batchDict.TryGetValue("Product", out var prodName) && prodName != null)
-                {
-                    productName = prodName!.ToString();
-                    _logger.LogInformation("ชื่อสินค้า: {ProductName}", productName);
-                }
-                else if (batchDict.TryGetValue("BME_Product", out var bmeProdName) && bmeProdName != null)
-                {
-                    productName = bmeProdName!.ToString();
-                    _logger.LogInformation("ชื่อสินค้า (BME): {ProductName}", productName);
-                }
-                
-                // ลองดึงข้อมูลจาก CustKeyResolved ก่อน แล้วค่อยใช้ CustKey เป็นตัวสำรอง
-                if (batchDict.TryGetValue("CustKeyResolved", out var resolvedCustKey) && resolvedCustKey != null)
-                {
-                    customerKey = resolvedCustKey!.ToString();
-                    _logger.LogInformation("ใช้ค่า CustKeyResolved: {CustKey}", customerKey);
-                }
-                else if (batchDict.TryGetValue("CustKey", out var custKey) && custKey != null)
-                {
-                    customerKey = custKey!.ToString();
-                    _logger.LogInformation("ใช้ค่า CustKey: {CustKey}", customerKey);
-                }
-                
-                batchDto.ProductKey = productKey;
-                batchDto.ProductName = productName;
-                batchDto.CustomerKey = customerKey;
-                
-                // ดึงข้อมูล batch ที่จำเป็น
-                if (batchDict.TryGetValue("ProductionDate", out var prodDate))
-                {
-                    string? prodDateStr = prodDate?.ToString();
-                    if (prodDateStr != null && DateTime.TryParse(prodDateStr, out var date))
+                    var prodDate = batchDict["ProductionDate"];
+                    if (prodDate != null && DateTime.TryParse(prodDate.ToString(), out var date))
                         batchDto.ProductionDate = date;
                 }
-                if (batchDict.TryGetValue("SchStartDate", out var schDate))
+                if (batchDict.ContainsKey("ExpiryDate"))
                 {
-                    string? schDateStr = schDate?.ToString();
-                    if (schDateStr != null && DateTime.TryParse(schDateStr, out var date))
-                        batchDto.SchStartDate = date;
-                }
-                if (batchDict.TryGetValue("SHELFLIFE_DAY", out var shelfLife))
-                {
-                    string? shelfLifeStr = shelfLife?.ToString();
-                    if (shelfLifeStr != null && int.TryParse(shelfLifeStr, out var days))
-                        batchDto.ShelfLifeDays = days;
-                }
-                if (batchDict.TryGetValue("DaysToExpire", out var daysToExpire))
-                {
-                    string? daysToExpireStr = daysToExpire?.ToString();
-                    if (daysToExpireStr != null && int.TryParse(daysToExpireStr, out var days))
-                        batchDto.DaysToExpire = days;
-                }
-                if (batchDict.TryGetValue("ExpiryDate", out var expiryDate))
-                {
-                    string? expiryDateStr = expiryDate?.ToString();
-                    if (expiryDateStr != null && DateTime.TryParse(expiryDateStr, out var date))
+                    var expDate = batchDict["ExpiryDate"];
+                    if (expDate != null && DateTime.TryParse(expDate.ToString(), out var date))
                         batchDto.ExpiryDate = date;
                 }
-                if (batchDict.TryGetValue("TotalBags", out var totalBags))
-                {
-                    string? totalBagsStr = totalBags?.ToString();
-                    if (totalBagsStr != null && int.TryParse(totalBagsStr, out var bags))
-                        batchDto.TotalBags = bags;
-                }
                 
-                // ดึงข้อมูลพื้นฐาน
-                if (batchDict.TryGetValue("LOT CODE", out var lotCode)) batchDto.LotCode = lotCode?.ToString();
-                if (batchDict.TryGetValue("STORECAP1", out var storage)) batchDto.StorageCondition = storage?.ToString();
+                // ดึงข้อมูลเพิ่มเติม
+                string? productKey = null;
+                string? customerKey = null;
                 
-                // ดึงข้อมูล ALLERGEN อย่างถูกต้อง
-                if (batchDict.TryGetValue("ALLERGEN1", out var allergen1) && allergen1 != null)
-                {
-                    batchDto.ALLERGEN1 = allergen1.ToString();
-                    _logger.LogInformation("ALLERGEN1: {Allergen1}", batchDto.ALLERGEN1);
-                }
+                if (batchDict.ContainsKey("ItemKey"))
+                    productKey = batchDict["ItemKey"]?.ToString();
+                if (batchDict.ContainsKey("CustKey"))
+                    customerKey = batchDict["CustKey"]?.ToString();
                 
-                if (batchDict.TryGetValue("ALLERGEN2", out var allergen2) && allergen2 != null)
+                // ดึงข้อมูลน้ำหนักถ้ามี
+                if (batchDict.ContainsKey("NET_WEIGHT1"))
                 {
-                    // รับรองว่า allergen2 ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && allergen2 != null
-                    var allergen2Str = allergen2.ToString();
-                    batchDto.ALLERGEN2 = allergen2Str;
-                    
-                    // แยกส่วนของ ALLERGEN2 ตามเครื่องหมาย :
-                    if (!string.IsNullOrEmpty(allergen2Str) && allergen2Str.Contains(':'))
+                    var netWeight = batchDict["NET_WEIGHT1"];
+                    if (netWeight != null)
                     {
-                        var colonIndex = allergen2Str.IndexOf(':');
-                        if (colonIndex > 0)
-                        {
-                            batchDto.ALLERGEN2_BeforeColon = allergen2Str.Substring(0, colonIndex);
-                            batchDto.ALLERGEN2_AfterColon = allergen2Str.Substring(colonIndex + 1).TrimStart();
-                            _logger.LogInformation("ALLERGEN2 แยก: {Before} : {After}", 
-                                batchDto.ALLERGEN2_BeforeColon, batchDto.ALLERGEN2_AfterColon);
-                        }
+                        // รับรองว่า netWeight ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && netWeight != null
+                        if (decimal.TryParse(netWeight.ToString(), out var weight))
+                            batchDto.NET_WEIGHT1 = weight;
                     }
-                }
-                
-                if (batchDict.TryGetValue("ALLERGEN3", out var allergen3) && allergen3 != null)
-                {
-                    // รับรองว่า allergen3 ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && allergen3 != null
-                    var allergen3Str = allergen3.ToString();
-                    batchDto.ALLERGEN3 = allergen3Str;
-                    
-                    // แยกส่วนของ ALLERGEN3 ตามเครื่องหมาย :
-                    if (!string.IsNullOrEmpty(allergen3Str) && allergen3Str.Contains(':'))
-                    {
-                        var colonIndex = allergen3Str.IndexOf(':');
-                        if (colonIndex > 0)
-                        {
-                            batchDto.ALLERGEN3_BeforeColon = allergen3Str.Substring(0, colonIndex);
-                            batchDto.ALLERGEN3_AfterColon = allergen3Str.Substring(colonIndex + 1).TrimStart();
-                            _logger.LogInformation("ALLERGEN3 แยก: {Before} : {After}", 
-                                batchDto.ALLERGEN3_BeforeColon, batchDto.ALLERGEN3_AfterColon);
-                        }
-                    }
-                }
-                
-                // ข้อมูลเสริมอื่นๆ
-                if (batchDict.TryGetValue("PRODATECAP", out var prodDateCap)) batchDto.ProductionDateCaption = prodDateCap?.ToString();
-                if (batchDict.TryGetValue("EXPIRYDATECAP", out var expiryDateCap)) batchDto.ExpiryDateCaption = expiryDateCap?.ToString();
-                if (batchDict.TryGetValue("COUNTRYOFORIGIN", out var country)) batchDto.CountryOfOriginLine = country?.ToString();
-                if (batchDict.TryGetValue("PACKUNIT1", out var packUnit)) batchDto.PACKUNIT1 = packUnit?.ToString();
-                if (batchDict.TryGetValue("NET_WEIGHT1", out var netWeight) && netWeight != null)
-                {
-                    // รับรองว่า netWeight ไม่เป็น null เนื่องจากมีการตรวจสอบด้วย && netWeight != null
-                    if (decimal.TryParse(netWeight.ToString(), out var weight))
-                        batchDto.NET_WEIGHT1 = weight;
                 }
                 
                 _logger.LogInformation("สร้าง template จาก BatchDto: ProductName={ProductName}, ProductKey={ProductKey}", 
@@ -415,26 +337,30 @@ namespace FgLabel.Api.Services
                 // แปลง template เป็น JSON string
                 var templateJson = System.Text.Json.JsonSerializer.Serialize(template);
                 
-                // 4. บันทึก template ลงฐานข้อมูล
+                // 4. บันทึก template ลงฐานข้อมูล - แก้ไขให้ใช้ NULL แทน string สำหรับ CreatedBy/UpdatedBy
                 var sql = @"
                     INSERT INTO FgL.LabelTemplate 
-                        (Name, Content, Version, CreatedAt, UpdatedAt)
+                        (Name, Content, Version, Active, Engine, PaperSize, Orientation, TemplateType, CreatedAt, UpdatedAt)
                     VALUES 
-                        (@Name, @Content, @Version, @CreatedAt, @UpdatedAt);
+                        (@Name, @Content, @Version, @Active, @Engine, @PaperSize, @Orientation, @TemplateType, @CreatedAt, @UpdatedAt);
                     SELECT SCOPE_IDENTITY();";
                 
-                // ไม่ใส่ค่า ProductKey, CustomerKey และ CreatedBy เพื่อหลีกเลี่ยงปัญหาการแปลงค่าเป็น int
                 var param = new
                 {
                     Name = $"Auto-{request.BatchNo}-{DateTime.UtcNow:yyyyMMdd}",
                     Content = templateJson,
                     Version = 1,
+                    Active = true,
+                    Engine = "Canvas",
+                    PaperSize = "4x4",
+                    Orientation = "Portrait",
+                    TemplateType = "Standard",
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
                 
                 var templateId = await _sql.GetConnection().ExecuteScalarAsync<int>(sql, param);
-                _logger.LogInformation("สร้าง template {TemplateId} สำหรับ batch {BatchNo} เรียบร้อย", templateId, request.BatchNo);
+                _logger.LogInformation("สร้าง template {TemplateId} สำหรับ batch {BatchNo} เรียบร้อยโดย {CreatedBy}", templateId, request.BatchNo, createdBy ?? "System");
                 
                 // 5. สร้าง mapping แยกตามประเภทข้อมูล
                 string? nullableProductKey = productKey;
@@ -457,15 +383,21 @@ namespace FgLabel.Api.Services
                 _logger.LogInformation("กำลังสร้าง template อัตโนมัติสำหรับ batch {BatchNo} ด้วย ProductKey={ProductKey}, CustomerKey={CustomerKey}",
                     batchNo, productKey ?? "null", customerKey ?? "null");
                 
+                // แก้ไขให้ใช้ NULL แทน string สำหรับ CreatedBy/UpdatedBy
                 var sql = @"
-                    INSERT INTO FgL.LabelTemplate (Name, Content, IsActive, CreatedAt, UpdatedAt)
-                    VALUES (@Name, @Content, 1, GETDATE(), GETDATE());
+                    INSERT INTO FgL.LabelTemplate (Name, Content, Active, Engine, PaperSize, Orientation, TemplateType, CreatedAt, UpdatedAt)
+                    VALUES (@Name, @Content, @Active, @Engine, @PaperSize, @Orientation, @TemplateType, GETDATE(), GETDATE());
                     SELECT SCOPE_IDENTITY()";
                 
                 var templateId = await _sql.GetConnection().ExecuteScalarAsync<int>(sql, new
                 {
                     Name = templateName,
-                    Content = templateContent
+                    Content = templateContent,
+                    Active = true,
+                    Engine = "Canvas",
+                    PaperSize = "4x4",
+                    Orientation = "Portrait",
+                    TemplateType = "Standard"
                 });
                 
                 _logger.LogInformation("สร้าง template {TemplateId} สำเร็จ กำลังสร้าง mapping", templateId);
@@ -495,7 +427,7 @@ namespace FgLabel.Api.Services
                 // Log the incoming request
                 _logger.LogInformation("Saving template: {Name}", dto.Name);
 
-                // Insert or update template
+                // Insert or update template - แก้ไขให้ไม่ส่ง CreatedBy/UpdatedBy
                 var templateId = await connection.ExecuteScalarAsync<int>(
                     @"MERGE INTO FgL.LabelTemplate AS target
                     USING (VALUES (@Name)) AS source (Name)
@@ -503,8 +435,8 @@ namespace FgLabel.Api.Services
                     WHEN MATCHED THEN 
                         UPDATE SET Description = @Description, Engine = @Engine, PaperSize = @PaperSize, Orientation = @Orientation, Content = @Content, UpdatedAt = SYSUTCDATETIME()
                     WHEN NOT MATCHED THEN
-                        INSERT (Name, Description, Engine, PaperSize, Orientation, Content, CreatedAt)
-                        VALUES (source.Name, @Description, @Engine, @PaperSize, @Orientation, @Content, SYSUTCDATETIME())
+                        INSERT (Name, Description, Engine, PaperSize, Orientation, Content, CreatedAt, UpdatedAt)
+                        VALUES (source.Name, @Description, @Engine, @PaperSize, @Orientation, @Content, SYSUTCDATETIME(), SYSUTCDATETIME())
                     OUTPUT inserted.TemplateID;",
                     new
                     {

@@ -14,6 +14,8 @@ interface Template {
   version: number;
   createdAt: string;
   updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
   active: boolean;
   paperSize: string;
   orientation: string;
@@ -59,6 +61,8 @@ export default function TemplateManagement() {
         // Transform data to match our expected format
         const formattedTemplates = data.map((template: any) => {
           console.log('Processing template:', template);
+          console.log('CreatedBy from API:', template.CreatedBy || template.createdBy);
+          console.log('UpdatedBy from API:', template.UpdatedBy || template.updatedBy);
           
           // Create a formatted template object ensuring we handle both camelCase and PascalCase fields
           const formattedTemplate: Template = {
@@ -74,10 +78,14 @@ export default function TemplateManagement() {
             paperSize: template.PaperSize || template.paperSize || '4x4',
             orientation: template.Orientation || template.orientation || 'Portrait',
             templateType: template.TemplateType || template.templateType || 'INNER',
-            engine: template.Engine || template.engine || 'html'
+            engine: template.Engine || template.engine || 'html',
+            createdBy: template.CreatedBy || template.createdBy || 'System',
+            updatedBy: template.UpdatedBy || template.updatedBy || 'System'
           };
           
           console.log('Formatted template:', formattedTemplate);
+          console.log('Final CreatedBy:', formattedTemplate.createdBy);
+          console.log('Final UpdatedBy:', formattedTemplate.updatedBy);
           return formattedTemplate;
         });
         
@@ -269,6 +277,18 @@ export default function TemplateManagement() {
       ),
     },
     {
+      title: 'Created By',
+      dataIndex: 'createdBy',
+      key: 'createdBy',
+      render: (text: string) => text || '-',
+    },
+    {
+      title: 'Updated By',
+      dataIndex: 'updatedBy',
+      key: 'updatedBy',
+      render: (text: string) => text || '-',
+    },
+    {
       title: 'Actions',
       key: 'actions',
       render: (_: any, record: Template) => (
@@ -289,13 +309,6 @@ export default function TemplateManagement() {
               disabled={!record.id}
             />
           </Tooltip>
-          <Tooltip title="Print Preview">
-            <Button
-              icon={<EyeOutlined />}
-              onClick={() => router.push(`/templates/preview/${record.id}`)}
-              disabled={!record.id}
-            />
-          </Tooltip>
         </Space>
       ),
     },
@@ -311,8 +324,11 @@ export default function TemplateManagement() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-xl font-bold text-gray-900">Label Template Management</h1>
+          <Button type="default" onClick={() => router.push('/batch-search')} style={{ background: '#f5f5f5', border: '1px solid #ccc' }}>
+            Batch Search
+          </Button>
         </div>
       </header>
       
