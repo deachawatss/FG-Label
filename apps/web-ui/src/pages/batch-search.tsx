@@ -61,6 +61,7 @@ import {
 } from '@ant-design/icons';
 import axios from 'axios';
 import RequireAuth from '../components/RequireAuth';
+import { useAuth } from '../contexts/AuthContext';
 import dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
 import { useRouter } from 'next/router';
@@ -922,6 +923,9 @@ const createStandardTemplate = (batch: Batch): any => {
 
 // แก้ไข React.FC เป็น React.FC<{}>
 const BatchSearch: React.FC<{}> = () => {
+  // ใช้ AuthContext เพื่อดึงข้อมูลผู้ใช้
+  const { user, username: authUsername, logout } = useAuth();
+  
   // State variables
   const [searchText, setSearchText] = useState<string>('');
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -929,8 +933,7 @@ const BatchSearch: React.FC<{}> = () => {
   const [previewVisible, setPreviewVisible] = useState<boolean>(false);
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
   
-  // เพิ่ม state สำหรับข้อมูลผู้ใช้
-  const [username, setUsername] = useState<string>('');
+  // เพิ่ม state สำหรับ user menu
   const [userMenuVisible, setUserMenuVisible] = useState<boolean>(false);
   
   // Print preview modal state
@@ -964,6 +967,27 @@ const BatchSearch: React.FC<{}> = () => {
   
   // เพิ่ม router สำหรับการนำทาง
   const router = useRouter();
+  
+  // ดึงชื่อผู้ใช้จาก AuthContext
+  const displayUsername = user?.username || authUsername || 'User';
+  
+  // ฟังก์ชันตรวจสอบสิทธิ์ตาม Role
+  const hasPermission = (requiredRoles: string[]): boolean => {
+    // Hardcode: ให้ deachawat, Jon, และ perapat เป็น admin เสมอ
+    const adminUsers = ['deachawat', 'Jon', 'perapat'];
+    if (adminUsers.includes(user?.username || '') || adminUsers.includes(authUsername || '')) {
+      return true;
+    }
+    
+    if (!user?.role) return false;
+    return requiredRoles.includes(user.role);
+  };
+  
+  // ตรวจสอบว่าเป็น Admin, Manager, หรือ Operator
+  const canCreateTemplate = hasPermission(['Admin', 'Manager', 'Operator']);
+  const canViewPrintLog = hasPermission(['Admin', 'Manager', 'Operator']);
+  const canManageTemplates = hasPermission(['Admin', 'Manager', 'Operator']);
+  const canEditTemplate = hasPermission(['Admin', 'Manager', 'Operator']);
   
   // เพิ่มฟังก์ชันสำหรับการจัดการสแกน QR code
   const handleQrScan = (data: string) => {
@@ -2128,7 +2152,7 @@ const BatchSearch: React.FC<{}> = () => {
       ...(formSheet ? ['FORMULATION SHEET'] : []),
       ...(palletTag ? ['PALLET TAG'] : [])
     ];
-    const payload = buildPrintLog(selectedBatch, startBag, endBag, specials, username);
+    const payload = buildPrintLog(selectedBatch, startBag, endBag, specials, displayUsername);
     try {
       await savePrintLog(payload);
     } catch (e) {
@@ -3066,22 +3090,8 @@ const BatchSearch: React.FC<{}> = () => {
    * Handle user logout
    */
   const handleLogout = () => {
-    // แสดง confirmation dialog ก่อนทำการ logout
-    Modal.confirm({
-      title: 'Logout',
-      content: 'Are you sure you want to logout?',
-      onOk: () => {
-        // ลบข้อมูล token และ user จาก localStorage
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        
-        // นำทางกลับไปยังหน้า login
-        router.push('/login');
-        
-        // แสดงข้อความแจ้งเตือน
-        message.success('Logged out successfully');
-      },
-    });
+    // ใช้ logout จาก AuthContext
+    logout();
   };
   
   /**
@@ -3104,30 +3114,6 @@ const BatchSearch: React.FC<{}> = () => {
   const handleNavigateToTemplateDesigner = () => {
     router.push('/templates/designer');
   };
-  
-  /**
-   * Load user info from localStorage on component mount
-   */
-  useEffect(() => {
-    if (isClient) {
-      const userJson = localStorage.getItem('user');
-      if (userJson) {
-        try {
-          const userData = JSON.parse(userJson);
-          setUsername(userData.username || 'User');
-        } catch (e) {
-          console.error('Error parsing user data:', e);
-          setUsername('User');
-        }
-      } else {
-        // ถ้าไม่มีข้อมูลผู้ใช้ ให้ใช้ค่าจาก token ถ้ามี
-        const token = localStorage.getItem('token');
-        if (token) {
-          setUsername('User');
-        }
-      }
-    }
-  }, []);
   
   // เรียกใช้ setupQrScanner เมื่อคอมโพเนนต์โหลดเสร็จ
   useEffect(() => {
@@ -3565,32 +3551,36 @@ const BatchSearch: React.FC<{}> = () => {
             <Dropdown
               menu={{
                 items: [
-                  {
+                  // แสดงเมนู Create Template เฉพาะ Admin, Manager, Operator
+                  ...(canCreateTemplate ? [{
                     key: 'create-template',
                     icon: <PlusOutlined />,
                     label: 'Create Template',
                     onClick: handleNavigateToTemplateDesigner
-                  },
-                  {
+                  }] : []),
+                  // แสดงเมนู Template Management เฉพาะ Admin, Manager, Operator
+                  ...(canManageTemplates ? [{
                     key: 'templates',
                     icon: <FileTextOutlined />,
                     label: 'Template Management',
                     onClick: handleNavigateToTemplateManagement
-                  },
-                  {
+                  }] : []),
+                  // แสดงเมนู Print Log เฉพาะ Admin, Manager, Operator
+                  ...(canViewPrintLog ? [{
                     key: 'printlog',
                     icon: <HistoryOutlined />,
                     label: 'Print Log',
                     onClick: handleNavigateToPrintLog
-                  },
-                  { type: 'divider' },
+                  }] : []),
+                  // แสดง divider เฉพาะเมื่อมีเมนูข้างบน
+                  ...((canCreateTemplate || canManageTemplates || canViewPrintLog) ? [{ type: 'divider' as const }] : []),
                   {
                     key: 'logout',
                     icon: <LogoutOutlined />,
                     label: 'Logout',
                     onClick: handleLogout
                   }
-                ]
+                ] as MenuProps['items']
               }}
               trigger={['click']}
             >
@@ -3614,7 +3604,7 @@ const BatchSearch: React.FC<{}> = () => {
                   fontWeight: 'bold', 
                   fontSize: '13px',
                   color: '#5D4037'
-                }}>{username || 'User'}</span>
+                }}>{displayUsername}</span>
                 <DownOutlined style={{ fontSize: '9px', marginLeft: 4, color: '#5D4037' }} />
               </a>
             </Dropdown>
@@ -3780,60 +3770,40 @@ const BatchSearch: React.FC<{}> = () => {
             >
               Close
             </Button>,
-            <Button
-              key="edit"
-              icon={<EditOutlined />}
-              onClick={() => {
-                if (selectedBatch && selectedBatch.templateId) {
-                  // ถ้าเป็น Special Label ให้นำทางไปหน้า Template Designer โดยตรง
-                  if (isSpecialLabel) {
-                    router.push(`/templates/designer?id=${selectedBatch.templateId}`);
-                    return;
-                  }
-                  
-                  // ถ้าเป็น Standard Label ให้ใช้วิธีเดิม
-                  try {
-                    // ก่อนที่จะไปยังหน้า Template Designer ให้เก็บข้อมูล elements ของ preview ลงใน localStorage
-                    const elements = createElementsFromPreview();
-                    
-                    if (elements.length > 0) {
-                      // สร้าง template ใหม่ที่มาจากข้อมูล elements ใน preview
-                      const previewTemplate = {
-                        name: selectedBatch.templateName || `Template-${selectedBatch.batchNo}`,
-                        description: `Auto-generated from batch ${selectedBatch.batchNo}`,
-                        productKey: selectedBatch.itemKey || selectedBatch.productKey,
-                        customerKey: selectedBatch.custKey,
-                        paperSize: '4x4',
-                        orientation: 'Portrait',
-                        templateType: 'Standard',
-                        labelType: 'Standard',
-                        elements: elements,
-                        canvasSize: { width: 400, height: 400 }
-                      };
-                      
-                      // เก็บข้อมูล preview template ลงใน localStorage
-                      localStorage.setItem('batchSearchTemplate', JSON.stringify(previewTemplate));
-                      
-                      // ถ้ามี templateId ให้ไปที่หน้า Template Designer ด้วย id ของ template
-                      if (selectedBatch.templateId) {
-                        router.push(`/templates/designer?id=${selectedBatch.templateId}&batchNo=${selectedBatch.batchNo}&labelType=Standard&productKey=${selectedBatch.itemKey || selectedBatch.productKey || ''}&customerKey=${selectedBatch.custKey || ''}`);
-                      } else {
-                        // ถ้าไม่มี templateId ให้ไปที่หน้า Template Designer แบบสร้างใหม่ด้วยข้อมูลจาก localStorage
-                        router.push(`/templates/designer?batchNo=${selectedBatch.batchNo}&labelType=Standard&productKey=${selectedBatch.itemKey || selectedBatch.productKey || ''}&customerKey=${selectedBatch.custKey || ''}`);
-                      }
-                    } else {
-                      // ถ้าไม่สามารถสร้าง elements ได้ ให้ไปที่หน้า Template Designer ด้วย id ของ template แบบเดิม
-                        router.push(`/templates/designer?id=${selectedBatch.templateId}`);
+            // แสดงปุ่ม Edit Template เฉพาะ Admin, Manager, Operator
+            ...(canEditTemplate ? [
+              <Button
+                key="edit"
+                icon={<EditOutlined />}
+                onClick={() => {
+                  if (selectedBatch && selectedBatch.templateId) {
+                    // ถ้าเป็น Special Label ให้นำทางไปหน้า Template Designer โดยตรง
+                    if (isSpecialLabel) {
+                      router.push(`/templates/designer?id=${selectedBatch.templateId}`);
+                      return;
                     }
-                  } catch (error) {
-                    console.error('Error preparing template for edit:', error);
-                    message.error('Failed to prepare template for editing');
+                    
+                    // ถ้าเป็น Standard Label ให้ใช้วิธีเดิม
+                    try {
+                      // ก่อนที่จะไปยังหน้า Template Designer ให้เก็บข้อมูล elements ของ preview ลงใน localStorage
+                      const elements = createElementsFromPreview();
+                      localStorage.setItem('templateElements', JSON.stringify(elements));
+                      localStorage.setItem('templateBatch', JSON.stringify(selectedBatch));
+                      
+                      // นำทางไปยังหน้า Template Designer พร้อมกับ templateId
+                      router.push(`/templates/designer?id=${selectedBatch.templateId}`);
+                    } catch (error) {
+                      console.error('Error navigating to template designer:', error);
+                      message.error('Error opening template designer');
+                    }
+                  } else {
+                    message.warning('No template ID found for this batch');
                   }
-                }
-              }}
-            >
-              Edit Template
-            </Button>,
+                }}
+              >
+                Edit Template
+              </Button>
+            ] : []),
             <Button
               key="print"
               type="primary"

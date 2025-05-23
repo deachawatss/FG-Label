@@ -33,6 +33,7 @@ using Microsoft.Extensions.Hosting;
 using FgLabel.Api.Repositories;
 using Microsoft.Extensions.Hosting;
 using FgLabel.Api.Integration.LabelRenderers;
+using System.ComponentModel.DataAnnotations;
 
 namespace FgLabel.Api;
 
@@ -536,6 +537,24 @@ public class Program
         });
         builder.Services.AddSingleton<ILdapService, LdapService>();
 
+        // ----- LDAP Service ------------------------------------------- //
+        builder.Services.Configure<LdapConfig>(options => {
+            options.Url = Environment.GetEnvironmentVariable("LDAP__Url") ?? builder.Configuration["ActiveDirectory:Url"] ?? "";
+            options.BaseDn = Environment.GetEnvironmentVariable("LDAP__BaseDn") ?? builder.Configuration["ActiveDirectory:BaseDn"] ?? "";
+            options.Username = Environment.GetEnvironmentVariable("LDAP__Username") ?? builder.Configuration["ActiveDirectory:Username"] ?? "";
+            options.Password = Environment.GetEnvironmentVariable("LDAP__Password") ?? builder.Configuration["ActiveDirectory:Password"] ?? "";
+            options.TimeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("LDAP__TimeoutSeconds"), out var timeout) ? timeout : 5;
+            options.DefaultDomain = Environment.GetEnvironmentVariable("LDAP__DefaultDomain") ?? "newlywedsfoods.co.th";
+        });
+        builder.Services.AddSingleton<ILdapService, LdapService>();
+
+        // ----- User Service (SQL Authentication) ------------------- //
+        builder.Services.Configure<UserConfig>(options =>
+        {
+            options.ConnectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? "";
+        });
+        builder.Services.AddScoped<IUserService, UserService>();
+
         // ลงทะเบียนบริการสำหรับการพิมพ์
         builder.Services.AddScoped<IPrintService, PrintService>();
         builder.Services.AddSingleton<FgLabel.Api.Integration.LabelRenderers.ZplRenderer>();
@@ -646,7 +665,7 @@ public class Program
         // ------------------------------------------------------------------ //
 
         /* ---------- 4.1  POST /api/auth/login --------------------------------- */
-        app.MapPost("/api/auth/login", async (FgLabel.Api.Models.LoginRequest login, ILogger<Program> log) =>
+        app.MapPost("/api/auth/login", async (FgLabel.Api.Models.LoginRequest login, ILogger<Program> log, IServiceProvider serviceProvider) =>
         {
             // Mask password in logs
             log.LogInformation("/api/auth/login username: {Username}", login.username);
@@ -662,24 +681,58 @@ public class Program
                     return Results.Ok(new { token = bypassToken, user = new { username = login.username } });
                 }
 
-                // ในโหมดการทำงานจริง ให้ใช้ LDAP
-                var ldapService = app.Services.GetService<ILdapService>();
+                // Try SQL authentication first
+                var userService = serviceProvider.GetService<IUserService>();
+                if (userService != null)
+                {
+                    log.LogDebug("Attempting SQL authentication for user: {Username}", login.username);
+                    var userInfo = await userService.ValidateUserAsync(login.username, login.password);
+                    
+                    if (userInfo != null)
+                    {
+                        // Update last login time
+                        await userService.UpdateLastLoginAsync(login.username);
+                        
+                        var authToken = GenerateJwtToken(login.username);
+                        log.LogInformation("SQL authentication successful for user: {Username}", login.username);
+                        
+                        return Results.Ok(new { 
+                            token = authToken, 
+                            user = new { 
+                                username = userInfo.Username,
+                                fullName = userInfo.FullName,
+                                email = userInfo.Email,
+                                department = userInfo.Department,
+                                position = userInfo.Position,
+                                role = userInfo.Role
+                            } 
+                        });
+                    }
+                    else
+                    {
+                        log.LogDebug("SQL authentication failed for user: {Username}, trying LDAP", login.username);
+                    }
+                }
+
+                // Fall back to LDAP authentication
+                var ldapService = serviceProvider.GetService<ILdapService>();
                 if (ldapService == null)
                 {
-                    log.LogError("LDAP service not available");
-                    return Results.Problem("LDAP service not available");
+                    log.LogError("Both User and LDAP services not available");
+                    return Results.Problem("Authentication services not available");
                 }
 
                 // LDAP validation can be slow, run it in a background thread to avoid blocking
                 var isValid = await Task.Run(() => ldapService.ValidateUser(login.username, login.password));
                 if (!isValid)
                 {
-                    log.LogWarning("Login failed for user: {Username}", login.username);
+                    log.LogWarning("Both SQL and LDAP authentication failed for user: {Username}", login.username);
                     return Results.Unauthorized();
                 }
 
-                var authToken = GenerateJwtToken(login.username);
-                return Results.Ok(new { token = authToken, user = new { username = login.username } });
+                var ldapAuthToken = GenerateJwtToken(login.username);
+                log.LogInformation("LDAP authentication successful for user: {Username}", login.username);
+                return Results.Ok(new { token = ldapAuthToken, user = new { username = login.username } });
             }
             catch (Exception ex)
             {
@@ -1049,15 +1102,6 @@ public class Program
         Console.WriteLine("[FgLabel] Mapping SignalR hub to /hubs/job");
         app.MapHub<Hubs.JobHub>("/hubs/job").RequireAuthorization();
 
-        /* ---------- 4.6  GET /api/me --------------------------------------- */
-        app.MapGet("/api/me", (ClaimsPrincipal user) =>
-            Results.Ok(new
-            {
-                id = user.Identity?.Name,
-                username = user.Identity?.Name,
-                role = "user"
-            }))
-           .RequireAuthorization();
 
         /* ---------- 4.7  GET /api/templates ------------------------------- */
         app.MapGet("/api/templates", async ([FromServices] ILabelTemplateRepository templateRepo, [FromServices] IDbConnection db, [FromServices] ILogger<Program> logger) =>
@@ -1966,6 +2010,49 @@ public class Program
             catch (Exception ex)
             {
                 return Results.Problem($"Error creating standard template: {ex.Message}");
+            }
+        }).RequireAuthorization();
+
+        /* ---------- 4.2  GET /api/me --------------------------------- */
+        app.MapGet("/api/me", async (HttpContext context, IServiceProvider serviceProvider, ILogger<Program> log) =>
+        {
+            try
+            {
+                // Get username from JWT token
+                var username = context.User?.Identity?.Name;
+                if (string.IsNullOrEmpty(username))
+                {
+                    log.LogWarning("No username found in token");
+                    return Results.Unauthorized();
+                }
+
+                // Try to get user info from SQL database first
+                var userService = serviceProvider.GetService<IUserService>();
+                if (userService != null)
+                {
+                    var userInfo = await userService.GetUserByUsernameAsync(username);
+                    if (userInfo != null)
+                    {
+                        return Results.Ok(new
+                        {
+                            username = userInfo.Username,
+                            fullName = userInfo.FullName,
+                            email = userInfo.Email,
+                            department = userInfo.Department,
+                            position = userInfo.Position,
+                            role = userInfo.Role,
+                            lastLogin = userInfo.LastLogin
+                        });
+                    }
+                }
+
+                // Fallback to basic user info from token
+                return Results.Ok(new { username = username });
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Error getting user info for: {Username}", context.User?.Identity?.Name);
+                return Results.Problem("Internal server error");
             }
         }).RequireAuthorization();
 

@@ -20,14 +20,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     const storedToken = localStorage.getItem('token');
     const storedUsername = localStorage.getItem('username');
+    const storedUser = localStorage.getItem('user');
     
     if (storedToken && storedUsername) {
       setToken(storedToken);
       setUsername(storedUsername);
+      
+      if (storedUser) {
+        try {
+          const userData = JSON.parse(storedUser);
+          setUser(userData);
+        } catch (e) {
+          console.error('Error parsing stored user data:', e);
+        }
+      }
+      
       setIsAuthenticating(true);
       api.get('/me')
         .then((response) => {
-          setUser(response.data);
+          const userData = response.data;
+          setUser(userData);
+          localStorage.setItem('user', JSON.stringify(userData));
           setError(null);
         })
         .catch((err) => {
@@ -56,6 +69,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     localStorage.removeItem('token');
     localStorage.removeItem('username');
+    localStorage.removeItem('user');
   };
 
   const login = async (username: string, password: string) => {
@@ -68,6 +82,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       setAuth(token, username);
       setUser(user);
+      localStorage.setItem('user', JSON.stringify(user));
     } catch (error: any) {
       console.error('Login failed:', error);
       setError('การเข้าสู่ระบบล้มเหลว: ' + (error.response?.data?.message || error.message));

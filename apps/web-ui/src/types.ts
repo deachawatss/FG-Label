@@ -1,6 +1,11 @@
 export interface User {
   username: string;
+  fullName?: string;
+  email?: string;
+  department?: string;
+  position?: string;
   role?: string;
+  lastLogin?: string;
 }
 
 export interface AuthContextType {
